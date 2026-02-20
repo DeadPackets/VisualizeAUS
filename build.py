@@ -652,35 +652,37 @@ html = f"""<!DOCTYPE html>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VisualizeAUS — 20 Years of AUS Course Data</title>
+<meta name="description" content="Interactive visualizations of 20 years of course data from the American University of Sharjah.">
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,300;1,9..40,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700;800&family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 :root {{
-  --bg: #06060b;
-  --bg-elevated: #0c0c14;
-  --bg-card: #0f0f19;
-  --bg-card-hover: #14141f;
-  --border: rgba(255,255,255,0.06);
-  --border-strong: rgba(255,255,255,0.1);
-  --border-glow: rgba(196, 151, 47, 0.2);
-  --text: #e8e8ec;
-  --text-secondary: #a1a1aa;
-  --text-muted: #63636e;
-  --text-dim: #3f3f46;
-  --gold: #C4972F;
-  --gold-light: #dbb456;
-  --gold-pale: #f0d88a;
-  --gold-glow: rgba(196, 151, 47, 0.08);
-  --gold-glow-strong: rgba(196, 151, 47, 0.15);
-  --radius: 16px;
-  --radius-sm: 10px;
-  --font-display: 'DM Serif Display', Georgia, serif;
-  --font-body: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
-  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  --bg: #faf7f2;
+  --bg-warm: #f3ede3;
+  --bg-card: #ffffff;
+  --bg-hero: #010508;
+  --border: #e2ddd4;
+  --border-light: #ece8e0;
+  --accent: #9e3223;
+  --accent-light: #b84a3a;
+  --accent-bg: #fdf5f4;
+  --text: #1a1a1a;
+  --text-secondary: #4a4a4a;
+  --text-muted: #7a7a7a;
+  --text-light: #999;
+  --text-on-dark: #f0ece4;
+  --cream: #e0d0af;
+  --cream-light: #f0e8d4;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --font-display: 'Raleway', sans-serif;
+  --font-body: 'Montserrat', sans-serif;
+  --font-mono: 'JetBrains Mono', monospace;
+  --max-width: 1100px;
 }}
 
 html {{ scroll-behavior: smooth; }}
@@ -689,209 +691,91 @@ body {{
   font-family: var(--font-body);
   background: var(--bg);
   color: var(--text);
-  line-height: 1.65;
+  line-height: 1.7;
+  font-size: 16px;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
 }}
 
-/* ---- Grain overlay ---- */
-body::after {{
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 9999;
-  pointer-events: none;
-  opacity: 0.025;
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
-}}
-
-/* ---- Scroll reveal ---- */
-.reveal {{
-  opacity: 0;
-  transform: translateY(32px);
-  transition: opacity 0.7s cubic-bezier(0.16, 1, 0.3, 1),
-              transform 0.7s cubic-bezier(0.16, 1, 0.3, 1);
-}}
-.reveal.visible {{
-  opacity: 1;
-  transform: translateY(0);
-}}
-.reveal-delay-1 {{ transition-delay: 0.1s; }}
-.reveal-delay-2 {{ transition-delay: 0.2s; }}
-.reveal-delay-3 {{ transition-delay: 0.3s; }}
-
 /* ===================== HERO ===================== */
 .hero {{
-  min-height: 100vh;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  background: var(--bg-hero);
+  color: var(--text-on-dark);
+  padding: 6rem 2rem 5rem;
   text-align: center;
-  padding: 2rem;
-  position: relative;
-  overflow: hidden;
 }}
 
-.hero::before {{
-  content: '';
-  position: absolute;
-  inset: 0;
-  background:
-    radial-gradient(ellipse 60% 50% at 50% 40%, var(--gold-glow-strong) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 30% at 30% 60%, rgba(59,130,246,0.04) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 30% at 70% 70%, rgba(168,85,247,0.03) 0%, transparent 70%);
-  animation: heroGlow 12s ease-in-out infinite alternate;
-}}
-
-@keyframes heroGlow {{
-  0% {{ opacity: 0.6; }}
-  100% {{ opacity: 1; }}
-}}
-
-/* Geometric grid pattern */
-.hero::after {{
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image:
-    linear-gradient(var(--border) 1px, transparent 1px),
-    linear-gradient(90deg, var(--border) 1px, transparent 1px);
-  background-size: 80px 80px;
-  mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 70%);
-  -webkit-mask-image: radial-gradient(ellipse 60% 60% at 50% 50%, black 20%, transparent 70%);
-  opacity: 0.5;
-}}
-
-.hero-content {{
-  position: relative;
-  z-index: 1;
-  max-width: 860px;
+.hero-inner {{
+  max-width: var(--max-width);
+  margin: 0 auto;
 }}
 
 .hero-eyebrow {{
   font-family: var(--font-mono);
   font-size: 0.75rem;
   font-weight: 500;
-  color: var(--gold);
-  letter-spacing: 0.25em;
+  color: var(--cream);
+  letter-spacing: 0.2em;
   text-transform: uppercase;
-  margin-bottom: 1.5rem;
-  opacity: 0;
-  animation: fadeUp 0.8s 0.2s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  margin-bottom: 1.25rem;
 }}
 
 .hero h1 {{
   font-family: var(--font-display);
-  font-size: clamp(3.25rem, 8vw, 6.5rem);
-  font-weight: 400;
-  font-style: italic;
+  font-size: clamp(2.5rem, 6vw, 4rem);
+  font-weight: 800;
   letter-spacing: -0.02em;
-  line-height: 1.05;
-  color: var(--text);
-  margin-bottom: 1.75rem;
-  opacity: 0;
-  animation: fadeUp 0.8s 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}}
-
-.hero h1 em {{
-  font-style: normal;
-  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-pale) 60%, var(--gold-light) 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  line-height: 1.15;
+  color: #fff;
+  margin-bottom: 1.25rem;
 }}
 
 .hero .subtitle {{
-  font-size: 1.15rem;
-  color: var(--text-secondary);
+  font-size: 1.1rem;
+  color: rgba(240, 236, 228, 0.7);
   font-weight: 300;
-  max-width: 560px;
-  margin: 0 auto 3.5rem;
-  line-height: 1.7;
-  opacity: 0;
-  animation: fadeUp 0.8s 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-}}
-
-@keyframes fadeUp {{
-  from {{ opacity: 0; transform: translateY(24px); }}
-  to {{ opacity: 1; transform: translateY(0); }}
+  max-width: 600px;
+  margin: 0 auto 3rem;
+  line-height: 1.75;
 }}
 
 .stats-row {{
   display: flex;
   justify-content: center;
   gap: 0;
-  opacity: 0;
-  animation: fadeUp 0.8s 0.65s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  background: rgba(255,255,255,0.05);
+  border-radius: var(--radius);
+  max-width: 680px;
+  margin: 0 auto;
+  border: 1px solid rgba(255,255,255,0.08);
 }}
 
 .stat {{
-  padding: 1.75rem 2.5rem;
+  flex: 1;
+  padding: 1.5rem 1rem;
   text-align: center;
-  position: relative;
 }}
 
-.stat:not(:last-child)::after {{
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 25%;
-  height: 50%;
-  width: 1px;
-  background: var(--border-strong);
+.stat + .stat {{
+  border-left: 1px solid rgba(255,255,255,0.08);
 }}
 
 .stat-value {{
   font-family: var(--font-mono);
-  font-size: 2rem;
-  font-weight: 600;
-  color: var(--gold);
-  letter-spacing: -0.03em;
+  font-size: 1.6rem;
+  font-weight: 500;
+  color: var(--cream);
   line-height: 1;
 }}
 
 .stat-label {{
   font-size: 0.7rem;
-  color: var(--text-muted);
+  color: rgba(240,236,228,0.5);
   text-transform: uppercase;
-  letter-spacing: 0.15em;
-  margin-top: 0.5rem;
+  letter-spacing: 0.12em;
+  margin-top: 0.4rem;
   font-weight: 500;
-}}
-
-.scroll-cue {{
-  position: absolute;
-  bottom: 2.5rem;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.5rem;
-  color: var(--text-dim);
-  font-size: 0.7rem;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-  font-family: var(--font-mono);
-  animation: fadeUp 0.8s 1s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-  opacity: 0;
-}}
-
-.scroll-cue::after {{
-  content: '';
-  width: 1px;
-  height: 32px;
-  background: linear-gradient(to bottom, var(--text-dim), transparent);
-  animation: scrollPulse 2s ease-in-out infinite;
-}}
-
-@keyframes scrollPulse {{
-  0%, 100% {{ opacity: 0.3; transform: scaleY(1); }}
-  50% {{ opacity: 0.8; transform: scaleY(1.3); }}
 }}
 
 /* ===================== NAV ===================== */
@@ -899,14 +783,14 @@ nav {{
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(6, 6, 11, 0.8);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  background: rgba(250, 247, 242, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
 }}
 
 nav .nav-inner {{
-  max-width: 1280px;
+  max-width: var(--max-width);
   margin: 0 auto;
   display: flex;
   align-items: center;
@@ -921,44 +805,36 @@ nav .nav-inner::-webkit-scrollbar {{ display: none; }}
 nav a {{
   color: var(--text-muted);
   text-decoration: none;
-  font-size: 0.8rem;
+  font-size: 0.82rem;
   font-weight: 500;
   white-space: nowrap;
-  transition: color 0.25s, border-color 0.25s;
-  padding: 1rem 1.25rem;
+  transition: color 0.2s;
+  padding: 0.9rem 1rem;
   border-bottom: 2px solid transparent;
-  letter-spacing: 0.01em;
 }}
 
-nav a:hover {{ color: var(--text-secondary); }}
-
-nav a.active {{
-  color: var(--gold);
-  border-bottom-color: var(--gold);
-}}
+nav a:hover {{ color: var(--text); }}
+nav a.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
 
 nav .nav-brand {{
   font-family: var(--font-display);
-  font-style: italic;
-  font-weight: 400;
+  font-weight: 700;
   color: var(--text);
-  font-size: 1.05rem;
-  padding-right: 1.5rem;
+  font-size: 0.95rem;
+  padding-right: 1.25rem;
   margin-right: 0.5rem;
   border-right: 1px solid var(--border);
-  letter-spacing: -0.01em;
 }}
 
 /* ===================== SECTIONS ===================== */
 .container {{
-  max-width: 1280px;
+  max-width: var(--max-width);
   margin: 0 auto;
   padding: 0 2rem;
 }}
 
 section {{
-  padding: 6rem 0;
-  position: relative;
+  padding: 4.5rem 0;
 }}
 
 section + section {{
@@ -966,46 +842,34 @@ section + section {{
 }}
 
 .section-header {{
-  margin-bottom: 3.5rem;
-  max-width: 720px;
+  margin-bottom: 2.5rem;
+  max-width: 680px;
 }}
 
 .section-header .section-num {{
   font-family: var(--font-mono);
-  font-size: 0.7rem;
+  font-size: 0.72rem;
   font-weight: 500;
-  color: var(--gold);
-  letter-spacing: 0.2em;
+  color: var(--accent);
+  letter-spacing: 0.15em;
   text-transform: uppercase;
-  margin-bottom: 1rem;
-  display: flex;
-  align-items: center;
-  gap: 1rem;
-}}
-
-.section-header .section-num::after {{
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: linear-gradient(to right, var(--gold-glow-strong), transparent);
-  max-width: 120px;
+  margin-bottom: 0.6rem;
 }}
 
 .section-header h2 {{
   font-family: var(--font-display);
-  font-size: 2.75rem;
-  font-weight: 400;
-  letter-spacing: -0.02em;
+  font-size: 2rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   color: var(--text);
-  margin-bottom: 1rem;
-  line-height: 1.15;
+  margin-bottom: 0.75rem;
+  line-height: 1.25;
 }}
 
 .section-header p {{
   color: var(--text-secondary);
-  font-size: 1.05rem;
+  font-size: 1rem;
   line-height: 1.75;
-  font-weight: 300;
 }}
 
 /* ===================== CHARTS ===================== */
@@ -1013,38 +877,48 @@ section + section {{
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.5rem;
-  margin-bottom: 2rem;
-  position: relative;
-  transition: border-color 0.4s, box-shadow 0.4s;
-}}
-
-.chart-container:hover {{
-  border-color: var(--border-glow);
-  box-shadow: 0 0 40px -10px var(--gold-glow);
+  padding: 1.25rem;
+  margin-bottom: 1.5rem;
 }}
 
 .chart-row {{
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 2rem;
+  gap: 1.5rem;
 }}
 
-/* ===================== INSIGHT ===================== */
-.insight {{
-  background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-elevated) 100%);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--gold);
+/* ===================== EXPLANATIONS ===================== */
+.explanation {{
+  background: var(--accent-bg);
+  border: 1px solid #f0dbd8;
+  border-left: 3px solid var(--accent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  padding: 1.5rem 2rem;
-  margin: 2rem 0;
-  font-size: 0.95rem;
-  line-height: 1.75;
+  padding: 1rem 1.25rem;
+  margin: -0.5rem 0 2rem;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}}
+
+.explanation strong {{
+  color: var(--accent);
+  font-weight: 600;
+}}
+
+/* ===================== INSIGHT (key stats) ===================== */
+.insight {{
+  background: var(--bg-warm);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1.25rem 1.5rem;
+  margin: 1.5rem 0;
+  font-size: 0.92rem;
+  line-height: 1.7;
   color: var(--text-secondary);
 }}
 
 .insight strong {{
-  color: var(--gold-light);
+  color: var(--text);
   font-weight: 600;
 }}
 
@@ -1054,53 +928,53 @@ section + section {{
   border: 1px solid var(--border);
   border-radius: var(--radius);
   overflow: hidden;
-  margin: 2rem 0;
+  margin: 1.5rem 0;
 }}
 
 .table-controls {{
   display: flex;
   gap: 0.75rem;
-  padding: 1.25rem 1.5rem;
+  padding: 1rem 1.25rem;
   border-bottom: 1px solid var(--border);
+  background: var(--bg-warm);
   flex-wrap: wrap;
-  background: var(--bg-elevated);
 }}
 
 .table-controls input, .table-controls select {{
-  background: var(--bg);
-  border: 1px solid var(--border-strong);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
   color: var(--text);
-  padding: 0.6rem 1rem;
+  padding: 0.55rem 0.9rem;
   border-radius: var(--radius-sm);
   font-family: var(--font-body);
   font-size: 0.85rem;
   outline: none;
-  transition: border-color 0.25s, box-shadow 0.25s;
+  transition: border-color 0.2s, box-shadow 0.2s;
 }}
 
 .table-controls input:focus, .table-controls select:focus {{
-  border-color: var(--gold);
-  box-shadow: 0 0 0 3px var(--gold-glow);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(158,50,35,0.08);
 }}
 
-.table-controls input::placeholder {{ color: var(--text-dim); }}
+.table-controls input::placeholder {{ color: var(--text-light); }}
 .table-controls input {{ flex: 1; min-width: 200px; }}
 
 table {{
   width: 100%;
   border-collapse: collapse;
-  font-size: 0.83rem;
+  font-size: 0.84rem;
 }}
 
 thead th {{
-  background: var(--bg-elevated);
-  padding: 0.85rem 1rem;
+  background: var(--bg-warm);
+  padding: 0.75rem 1rem;
   text-align: left;
   font-weight: 600;
   color: var(--text-muted);
   text-transform: uppercase;
   font-size: 0.68rem;
-  letter-spacing: 0.1em;
+  letter-spacing: 0.08em;
   position: sticky;
   top: 0;
   cursor: pointer;
@@ -1110,17 +984,17 @@ thead th {{
   font-family: var(--font-mono);
 }}
 
-thead th:hover {{ color: var(--gold); }}
+thead th:hover {{ color: var(--accent); }}
 
 tbody tr {{
-  border-bottom: 1px solid var(--border);
-  transition: background 0.2s;
+  border-bottom: 1px solid var(--border-light);
+  transition: background 0.15s;
 }}
 
-tbody tr:hover {{ background: var(--bg-card-hover); }}
+tbody tr:hover {{ background: var(--bg-warm); }}
 
 tbody td {{
-  padding: 0.65rem 1rem;
+  padding: 0.6rem 1rem;
   color: var(--text-secondary);
   max-width: 300px;
   overflow: hidden;
@@ -1129,21 +1003,17 @@ tbody td {{
 }}
 
 .table-scroll {{
-  max-height: 520px;
+  max-height: 500px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-color: var(--border) transparent;
 }}
 
-.table-scroll::-webkit-scrollbar {{ width: 6px; }}
-.table-scroll::-webkit-scrollbar-track {{ background: transparent; }}
-.table-scroll::-webkit-scrollbar-thumb {{ background: var(--border-strong); border-radius: 3px; }}
-
 .table-info {{
-  padding: 0.85rem 1.5rem;
-  border-top: 1px solid var(--border);
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--border-light);
   font-size: 0.78rem;
-  color: var(--text-dim);
+  color: var(--text-light);
   font-family: var(--font-mono);
 }}
 
@@ -1151,49 +1021,46 @@ tbody td {{
 .chains-title {{
   font-family: var(--font-display);
   color: var(--text);
-  margin: 3rem 0 1.25rem;
-  font-size: 1.5rem;
-  font-weight: 400;
+  margin: 2.5rem 0 1rem;
+  font-size: 1.25rem;
+  font-weight: 700;
 }}
 
 .chain {{
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 1rem 1.5rem;
-  margin: 0.6rem 0;
+  padding: 0.85rem 1.25rem;
+  margin: 0.5rem 0;
   font-family: var(--font-mono);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   overflow-x: auto;
   white-space: nowrap;
-  transition: border-color 0.3s;
 }}
 
-.chain:hover {{ border-color: var(--border-glow); }}
-.chain-steps {{ color: var(--gold); margin-right: 1rem; font-weight: 600; }}
-.chain-arrow {{ color: var(--text-dim); margin: 0 0.3rem; }}
+.chain-steps {{ color: var(--accent); margin-right: 0.75rem; font-weight: 600; }}
+.chain-arrow {{ color: var(--text-light); margin: 0 0.2rem; }}
 
 /* ===================== TABS ===================== */
 .tabs {{
   display: flex;
   gap: 0;
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
   border-bottom: 1px solid var(--border);
 }}
 
 .tab {{
-  padding: 0.85rem 1.75rem;
+  padding: 0.75rem 1.5rem;
   cursor: pointer;
   color: var(--text-muted);
   font-size: 0.85rem;
   font-weight: 500;
   border-bottom: 2px solid transparent;
-  transition: color 0.25s, border-color 0.25s;
-  font-family: var(--font-body);
+  transition: color 0.2s, border-color 0.2s;
 }}
 
-.tab:hover {{ color: var(--text-secondary); }}
-.tab.active {{ color: var(--gold); border-bottom-color: var(--gold); }}
+.tab:hover {{ color: var(--text); }}
+.tab.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
 
 .tab-content {{ display: none; }}
 .tab-content.active {{ display: block; }}
@@ -1201,41 +1068,27 @@ tbody td {{
 /* ===================== FOOTER ===================== */
 footer {{
   text-align: center;
-  padding: 5rem 2rem;
-  color: var(--text-dim);
+  padding: 3.5rem 2rem;
+  color: var(--text-muted);
   font-size: 0.85rem;
   border-top: 1px solid var(--border);
-  position: relative;
+  background: var(--bg-warm);
 }}
 
-footer .footer-brand {{
-  font-family: var(--font-display);
-  font-style: italic;
-  font-size: 1.5rem;
-  color: var(--text-muted);
-  margin-bottom: 1rem;
-}}
-
-footer a {{ color: var(--gold); text-decoration: none; transition: color 0.2s; }}
-footer a:hover {{ color: var(--gold-light); }}
-
-footer p {{ margin-top: 0.4rem; }}
+footer a {{ color: var(--accent); text-decoration: none; }}
+footer a:hover {{ text-decoration: underline; }}
+footer p {{ margin-top: 0.3rem; }}
 
 /* ===================== RESPONSIVE ===================== */
 @media (max-width: 768px) {{
   .chart-row {{ grid-template-columns: 1fr; }}
   .stats-row {{ flex-wrap: wrap; }}
-  .stat {{ padding: 1.25rem 1.5rem; }}
-  .hero h1 {{ font-size: 2.75rem; }}
-  section {{ padding: 4rem 0; }}
-  .section-header h2 {{ font-size: 2rem; }}
-  nav .nav-inner {{ padding: 0 1rem; }}
-  nav a {{ padding: 0.85rem 0.75rem; font-size: 0.75rem; }}
-}}
-
-@media (max-width: 480px) {{
-  .stat {{ padding: 1rem; }}
-  .stat-value {{ font-size: 1.5rem; }}
+  .stat {{ padding: 1rem 0.75rem; }}
+  .stat-value {{ font-size: 1.3rem; }}
+  .hero h1 {{ font-size: 2.25rem; }}
+  section {{ padding: 3rem 0; }}
+  .section-header h2 {{ font-size: 1.6rem; }}
+  nav a {{ padding: 0.75rem 0.6rem; font-size: 0.75rem; }}
   .container {{ padding: 0 1rem; }}
 }}
 
@@ -1245,13 +1098,12 @@ footer p {{ margin-top: 0.4rem; }}
 
 <!-- Hero -->
 <div class="hero">
-  <div class="hero-content">
+  <div class="hero-inner">
     <div class="hero-eyebrow">American University of Sharjah</div>
-    <h1><em>VisualizeAUS</em></h1>
+    <h1>VisualizeAUS</h1>
     <p class="subtitle">
       Twenty years of course data, visualized and made explorable.
-      Every section, instructor, prerequisite, and schedule
-      from 2005 to 2026.
+      Every section, instructor, prerequisite, and schedule from 2005 to 2026.
     </p>
     <div class="stats-row">
       <div class="stat">
@@ -1272,7 +1124,6 @@ footer p {{ margin-top: 0.4rem; }}
       </div>
     </div>
   </div>
-  <div class="scroll-cue">Scroll</div>
 </div>
 
 <!-- Navigation -->
@@ -1295,131 +1146,187 @@ footer p {{ margin-top: 0.4rem; }}
 
 <!-- 1. Growth -->
 <section id="growth">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">01 — University Growth</div>
     <h2>Two Decades of Expansion</h2>
-    <p>AUS has grown steadily since 2005, expanding from around 1,100 course sections per regular semester to nearly 2,000.</p>
+    <p>How has AUS grown its course offerings from 2005 to 2026?</p>
   </div>
-  <div class="chart-container reveal reveal-delay-1">{charts['growth']}</div>
-  <div class="insight reveal reveal-delay-2">
-    <strong>{growth_pct:.0f}% growth</strong> in regular semester sections from Spring 2005 to Spring 2026.
-    Peak semester: <strong>{peak_sem}</strong> with {peak_val:,} sections.
-    Average trend: <strong>+{z[0]:.1f} sections</strong> per semester.
+  <div class="chart-container">{charts['growth']}</div>
+  <div class="explanation">
+    Each dot represents one semester. <strong>Red dots are Fall semesters</strong>, blue are Spring, and green are Summer terms. The dashed line shows the overall upward trend. AUS has grown from about 1,100 course sections per regular semester in 2005 to nearly 2,000 in 2025 — a <strong>{growth_pct:.0f}% increase</strong>. The peak was <strong>{peak_sem}</strong> with {peak_val:,} sections. Summer terms are much smaller (200-400 sections) and appear as the lower cluster.
   </div>
-  <div class="chart-container reveal">{charts['courses_vs_sections']}</div>
+  <div class="chart-container">{charts['courses_vs_sections']}</div>
+  <div class="explanation">
+    The blue line tracks total sections offered, while the red line tracks unique courses. Both have grown, but total sections grew faster — meaning AUS is offering <strong>more sections of existing courses</strong> (to accommodate more students) in addition to introducing new ones. On average, each unique course has about 2.2 sections per semester.
+  </div>
 </section>
 
 <!-- 2. Subjects -->
 <section id="subjects">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">02 — Subject Analysis</div>
     <h2>What Does AUS Teach?</h2>
-    <p>{table_counts['subjects']} subject areas spanning engineering, sciences, arts, and humanities. The top 10 subjects account for nearly half of all sections.</p>
+    <p>{table_counts['subjects']} subject areas spanning engineering, sciences, arts, and humanities.</p>
   </div>
-  <div class="chart-container reveal">{charts['subjects_bar']}</div>
-  <div class="chart-container reveal">{charts['subject_lines']}</div>
-  <div class="chart-container reveal">{charts['subject_heatmap']}</div>
+  <div class="chart-container">{charts['subjects_bar']}</div>
+  <div class="explanation">
+    Mathematics (MTH) has the most sections of any subject — over 5,500 across 20 years — because nearly every student at AUS takes multiple math courses regardless of major. The next largest subjects are Civil Engineering (CVE), Mechanical Engineering (MCE), and Electrical Engineering (ELE), reflecting AUS's strong engineering focus. The <strong>top 10 subjects account for nearly half</strong> of all sections ever offered.
+  </div>
+  <div class="chart-container">{charts['subject_lines']}</div>
+  <div class="explanation">
+    This shows how the top 15 subjects have evolved semester by semester. Most subjects show steady or growing offerings. Some interesting patterns: <strong>Writing (WRI)</strong> courses saw a significant increase around 2010, likely reflecting curriculum changes. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion.
+  </div>
+  <div class="chart-container">{charts['subject_heatmap']}</div>
+  <div class="explanation">
+    Each cell shows the number of sections a subject offered in a given year. <strong>Darker red means more sections.</strong> You can see the overall growth pattern clearly — most subjects get darker (more sections) as you move from left to right. Gaps or lighter spots can indicate years where a subject reduced offerings or was restructured.
+  </div>
 </section>
 
 <!-- 3. Instructors -->
 <section id="instructors">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">03 — Instructor Analysis</div>
     <h2>The Teaching Workforce</h2>
-    <p>{table_counts['instructors']:,} unique instructors have taught at AUS since 2005. Some have been active for over a decade.</p>
+    <p>{table_counts['instructors']:,} unique instructors have taught at AUS since 2005.</p>
   </div>
-  <div class="chart-container reveal">{charts['instructors']}</div>
+  <div class="chart-container">{charts['instructors']}</div>
+  <div class="explanation">
+    The most prolific instructor has taught <strong>nearly 500 sections</strong> over their career at AUS. The color indicates how many semesters they've been active — darker blue means a longer tenure. Many of the top instructors have been active for 30+ semesters (15+ years), suggesting a stable core faculty.
+  </div>
   <div class="chart-row">
-    <div class="chart-container reveal">{charts['tenure']}</div>
-    <div class="chart-container reveal reveal-delay-1">{charts['active_instructors']}</div>
+    <div class="chart-container">{charts['tenure']}</div>
+    <div class="chart-container">{charts['active_instructors']}</div>
   </div>
-  <div class="chart-container reveal">{charts['tba_rate']}</div>
+  <div class="explanation">
+    <strong>Left:</strong> Most instructors teach for a relatively short time — the histogram is heavily skewed toward 1-5 semesters. However, a significant number have been active for 20+ semesters (10+ years), forming the experienced backbone of AUS's faculty. <strong>Right:</strong> The number of active instructors per semester has grown from about 300 in 2005 to over 500 in recent years, tracking the university's overall expansion.
+  </div>
+  <div class="chart-container">{charts['tba_rate']}</div>
+  <div class="explanation">
+    The "TBA rate" is the percentage of sections each semester where no instructor was assigned at the time the data was scraped. <strong>A high TBA rate (especially in recent semesters) often means instructors haven't been finalized yet</strong> rather than that sections are truly unstaffed. Spring 2026, for example, may still have high TBA because the semester was upcoming when this data was collected.
+  </div>
 </section>
 
 <!-- 4. Schedule -->
 <section id="schedule">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">04 — Schedule Patterns</div>
     <h2>When Does AUS Have Class?</h2>
-    <p>AUS follows a UAE schedule with classes Sunday through Thursday. The dominant patterns are Mon/Wed 75-minute blocks and Tue/Thu/Sun 50-minute blocks.</p>
+    <p>AUS follows a UAE schedule: classes run Sunday through Thursday, with Saturday occasionally used.</p>
   </div>
-  <div class="chart-container reveal">{charts['schedule_heatmap']}</div>
+  <div class="chart-container">{charts['schedule_heatmap']}</div>
+  <div class="explanation">
+    This heatmap shows <strong>how many course sections are scheduled at each day-time combination</strong> across all 20 years. The busiest slots are clearly visible as deep red: <strong>Monday and Wednesday around 11:00 AM and 2:00 PM</strong> are the most popular. Sunday through Thursday are the main teaching days (the UAE work week). Saturday is rarely used. Notice that 8:00 AM slots are relatively light — early mornings are less popular for scheduling.
+  </div>
   <div class="chart-row">
-    <div class="chart-container reveal">{charts['day_patterns']}</div>
-    <div class="chart-container reveal reveal-delay-1">{charts['buildings']}</div>
+    <div class="chart-container">{charts['day_patterns']}</div>
+    <div class="chart-container">{charts['buildings']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> The two dominant scheduling patterns are <strong>Mon/Wed (MW)</strong> — typically 75-minute blocks — and <strong>Tue/Thu/Sun (TRU)</strong> — typically 50-minute blocks. Together these account for over half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections by far, followed by the Language Building and Engineering Building Right (EB2). This reflects the campus layout where general-purpose lecture halls are concentrated in NAB1.
   </div>
 </section>
 
 <!-- 5. Prerequisites -->
 <section id="prerequisites">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">05 — Prerequisite Network</div>
     <h2>The Dependency Web</h2>
-    <p>{G.number_of_nodes()} courses connected by {G.number_of_edges()} prerequisite edges. Some chains span {len(longest_chains[0][1]) if longest_chains else 'N/A'} courses deep.</p>
+    <p>{G.number_of_nodes()} courses connected by {G.number_of_edges()} prerequisite edges.</p>
   </div>
-  <div class="chart-container reveal">{charts['prereq_connected']}</div>
+  <div class="chart-container">{charts['prereq_connected']}</div>
+  <div class="explanation">
+    This chart shows the <strong>most connected courses in the prerequisite graph</strong>. Red bars show how many other courses list this course as a prerequisite ("is prerequisite for"), while blue bars show how many prerequisites the course itself requires. Foundational courses like introductory math, physics, and programming have enormous outgoing connections — dozens of upper-level courses depend on them.
+  </div>
 
-  <h3 class="chains-title reveal">Longest Prerequisite Chains</h3>
-  {''.join(f'<div class="chain reveal"><span class="chain-steps">[{len(path)}]</span> {"<span class=chain-arrow> &rarr; </span>".join(path)}</div>' for _, path in longest_chains)}
+  <h3 class="chains-title">Longest Prerequisite Chains</h3>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">These are the longest sequences where each course requires the previous one. A chain of {len(longest_chains[0][1]) if longest_chains else 'N/A'} means a student must pass {len(longest_chains[0][1]) - 1 if longest_chains else 'N/A'} prerequisite courses before reaching the final one.</p>
+  {''.join('<div class="chain"><span class="chain-steps">[' + str(len(path)) + ']</span> ' + '<span class=chain-arrow> &rarr; </span>'.join(path) + '</div>' for _, path in longest_chains)}
 
-  <div class="chart-container reveal" style="margin-top: 2.5rem">{charts['coe_network']}</div>
-  <div class="chart-container reveal">{charts['prereq_complexity']}</div>
-  <div class="chart-container reveal">{charts['cross_dept']}</div>
+  <div class="chart-container" style="margin-top: 2rem">{charts['coe_network']}</div>
+  <div class="explanation">
+    This interactive network graph shows all <strong>Computer Engineering (COE) courses</strong> and their prerequisites. Red nodes are COE courses; blue nodes are prerequisites from other departments (like MTH, PHY, CMP). The size of each node reflects how many connections it has. You can see how foundational courses in math and physics feed into the COE curriculum, and how upper-level COE courses form deep chains. Hover over nodes to see course names.
+  </div>
+  <div class="chart-container">{charts['prereq_complexity']}</div>
+  <div class="explanation">
+    This compares departments by how many prerequisites their courses require on average. <strong>A higher bar means more prerequisite requirements per course</strong> in that department. Engineering and science departments tend to have the most complex prerequisite structures, reflecting the sequential nature of technical curricula. Arts and humanities subjects typically have fewer formal prerequisites.
+  </div>
+  <div class="chart-container">{charts['cross_dept']}</div>
+  <div class="explanation">
+    This matrix shows <strong>which departments depend on which other departments</strong> for prerequisites. Read it as: courses in the row department require prerequisites from the column department. Strong off-diagonal cells indicate heavy cross-department dependencies. For example, many engineering departments depend heavily on MTH (Mathematics) and PHY (Physics) courses. The darker the blue, the more courses have that cross-department dependency.
+  </div>
 </section>
 
 <!-- 6. Grades -->
 <section id="grades">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">06 — Grade Requirements</div>
     <h2>Academic Rigor</h2>
-    <p>Most prerequisites require a minimum grade of C-, but some departments are significantly stricter.</p>
+    <p>What minimum grades do prerequisites require, and how strict are different departments?</p>
   </div>
-  <div class="chart-container reveal">{charts['grades']}</div>
-  <div class="chart-container reveal">{charts['grade_strictness']}</div>
+  <div class="chart-container">{charts['grades']}</div>
+  <div class="explanation">
+    The overwhelming majority of prerequisites at AUS require a minimum grade of <strong>C-</strong>, which is the standard passing grade for moving forward. However, some courses require higher grades: <strong>C (no minus)</strong> is the second most common, followed by <strong>A-</strong>, which appears in certain competitive programs. A small number of prerequisites require a B or higher — these are typically for advanced courses where strong foundational knowledge is critical.
+  </div>
+  <div class="chart-container">{charts['grade_strictness']}</div>
+  <div class="explanation">
+    Each bar is broken down by the grade levels required for that department's prerequisites. Departments shown at the left of the chart have <strong>the highest proportion of strict grade requirements</strong> (A or B range). The green (C-) portion dominates for most departments, confirming that C- is the university-wide standard. Red and orange segments (A/A- and B range) highlight departments with more demanding progression standards.
+  </div>
 </section>
 
 <!-- 7. Catalog -->
 <section id="catalog">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">07 — Course Catalog</div>
     <h2>Credits, Lectures, and Labs</h2>
-    <p>{table_counts['catalog']:,} unique courses in the catalog. The vast majority are 3-credit courses with lecture-only format.</p>
+    <p>{table_counts['catalog']:,} unique courses in the catalog.</p>
   </div>
   <div class="chart-row">
-    <div class="chart-container reveal">{charts['credit_hours']}</div>
-    <div class="chart-container reveal reveal-delay-1">{charts['lab_lecture']}</div>
+    <div class="chart-container">{charts['credit_hours']}</div>
+    <div class="chart-container">{charts['lab_lecture']}</div>
   </div>
-  <div class="chart-container reveal">{charts['lecture_lab']}</div>
+  <div class="explanation">
+    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses, which is standard for most universities. A smaller number carry 1, 2, 4, or 6 credits — labs, independent studies, and capstone projects often differ from the 3-credit standard. <strong>Right:</strong> This breaks down lecture versus lab hours by department. Engineering and science departments have significantly more lab hours than humanities departments, reflecting their hands-on curriculum requirements.
+  </div>
+  <div class="chart-container">{charts['lecture_lab']}</div>
+  <div class="explanation">
+    This shows the <strong>ratio of lab to lecture sections over time</strong>. The stacked bars show absolute counts, while the green line shows the percentage of sections that are labs. The lab percentage has remained fairly stable at around 15-20%, meaning AUS consistently allocates about one lab section for every five lecture sections.
+  </div>
 </section>
 
 <!-- 8. Enrollment -->
 <section id="enrollment">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">08 — Enrollment</div>
     <h2>How Full Are Classes?</h2>
-    <p>Tracking seat availability across 20 years reveals which subjects and semesters face the most capacity pressure.</p>
+    <p>Tracking seat availability across 20 years of data.</p>
   </div>
-  <div class="chart-container reveal">{charts['enrollment']}</div>
-  <div class="chart-container reveal">{charts['fill_rate']}</div>
-  {'<div class="chart-container reveal">' + charts.get("fees", "") + '</div>' if "fees" in charts else ""}
-  {'<div class="chart-container reveal">' + charts.get("fee_trend", "") + '</div>' if "fee_trend" in charts else ""}
+  <div class="chart-container">{charts['enrollment']}</div>
+  <div class="explanation">
+    Each bar represents a semester, split into sections that had <strong>available seats (green)</strong> and sections that were <strong>completely full (red)</strong>. Note that this data reflects a single snapshot in time (when the database was scraped), not the entire registration period. Early semesters may appear more "full" because enrollment data was captured later in the term, while future semesters may appear more "available" because registration is still ongoing.
+  </div>
+  <div class="chart-container">{charts['fill_rate']}</div>
+  <div class="explanation">
+    This ranks subjects by what percentage of their sections were full. <strong>Higher bars mean more sections at capacity.</strong> Subjects with high fill rates are in high demand and may benefit from additional sections. Note that small subjects with few sections can appear disproportionately full due to small sample sizes.
+  </div>
+  {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and type. The boxes show the spread of fee amounts — the line in the middle is the median, and the box covers the 25th to 75th percentile. Different colleges (CAS for Arts & Sciences, CAAD for Architecture, Art and Design) charge different technology fee tiers, with CAAD typically charging more due to specialized software and equipment needs.</div>' if "fees" in charts else ""}
+  {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">This tracks how the average fee amount has changed over the semesters. Fee increases over time reflect general cost inflation and evolving technology requirements across different colleges.</div>' if "fee_trend" in charts else ""}
 </section>
 
 <!-- 9. Browse Data -->
 <section id="browse">
-  <div class="section-header reveal">
+  <div class="section-header">
     <div class="section-num">09 — Browse Data</div>
     <h2>Explore the Dataset</h2>
-    <p>Search, filter, and sort through the raw course data. Showing the most recent 5,000 sections and the full course catalog.</p>
+    <p>Search, filter, and sort through the raw data. Showing the most recent 5,000 sections and the full course catalog. Click any column header to sort.</p>
   </div>
 
-  <div class="tabs reveal">
+  <div class="tabs">
     <div class="tab active" onclick="switchTab('courses')">Recent Courses</div>
     <div class="tab" onclick="switchTab('catalog')">Course Catalog</div>
   </div>
 
   <div id="tab-courses" class="tab-content active">
-    <div class="table-wrapper reveal">
+    <div class="table-wrapper">
       <div class="table-controls">
         <input type="text" id="course-search" placeholder="Search courses — try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
         <select id="course-semester" onchange="filterTable('courses')">
@@ -1477,7 +1384,6 @@ footer p {{ margin-top: 0.4rem; }}
 
 <!-- Footer -->
 <footer>
-  <div class="footer-brand">VisualizeAUS</div>
   <p>
     Built with data from <a href="https://github.com/DeadPackets/AUSCrawl">AUSCrawl</a>
     — {table_counts['courses']:,} sections across {table_counts['semesters']} semesters
@@ -1489,18 +1395,6 @@ footer p {{ margin-top: 0.4rem; }}
 </footer>
 
 <script>
-// ---- Scroll reveal observer ----
-const revealObserver = new IntersectionObserver((entries) => {{
-  entries.forEach(entry => {{
-    if (entry.isIntersecting) {{
-      entry.target.classList.add('visible');
-      revealObserver.unobserve(entry.target);
-    }}
-  }});
-}}, {{ threshold: 0.08, rootMargin: '0px 0px -40px 0px' }});
-
-document.querySelectorAll('.reveal').forEach(el => revealObserver.observe(el));
-
 // ---- Course data ----
 const courseData = {browse_json};
 const catalogData = {catalog_json};
