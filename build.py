@@ -666,6 +666,533 @@ try:
 except Exception:
     pass
 
+# ===== NEW: Academic Levels Over Time =====
+df_levels_raw = pd.read_sql_query("""
+    SELECT c.levels, s.term_name, s.term_id, COUNT(*) as sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.levels != '' AND (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+    GROUP BY c.levels, s.term_id ORDER BY s.term_id
+""", conn)
+
+def primary_level(lev):
+    lev = str(lev).lower()
+    if 'doctorate' in lev: return 'Doctorate'
+    if 'graduate' in lev and 'under' not in lev: return 'Graduate'
+    if 'achievement' in lev: return 'Achievement Academy'
+    if 'intensive english' in lev: return 'Intensive English'
+    if 'post bachelor' in lev: return 'Post Bachelor'
+    return 'Undergraduate'
+
+df_levels_raw['primary_level'] = df_levels_raw['levels'].apply(primary_level)
+df_levels_agg = df_levels_raw.groupby(['term_name', 'term_id', 'primary_level'])['sections'].sum().reset_index()
+
+level_order = ['Undergraduate', 'Graduate', 'Post Bachelor', 'Doctorate',
+               'Achievement Academy', 'Intensive English']
+level_colors_map = {'Undergraduate': '#2471a3', 'Graduate': '#c0392b', 'Post Bachelor': '#8e44ad',
+                    'Doctorate': '#27ae60', 'Achievement Academy': '#d68910', 'Intensive English': '#1abc9c'}
+
+fig = go.Figure()
+for level in level_order:
+    df_l = df_levels_agg[df_levels_agg['primary_level'] == level].sort_values('term_id')
+    if len(df_l) > 0:
+        fig.add_trace(go.Scatter(x=df_l['term_name'], y=df_l['sections'],
+            name=level, mode='lines', stackgroup='one',
+            line=dict(color=level_colors_map.get(level, '#95a5a6'), width=0.5)))
+fig.update_layout(template=TEMPLATE, title="Course Sections by Academic Level Over Time",
+                  height=500, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="Sections",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['levels_over_time'] = chart_html(fig, 'levels_over_time')
+
+# Level distribution (aggregate)
+df_level_totals = df_levels_raw.groupby('primary_level')['sections'].sum().reset_index()
+df_level_totals = df_level_totals.sort_values('sections', ascending=True)
+total_level_sections = df_level_totals['sections'].sum()
+df_level_totals['pct'] = (df_level_totals['sections'] / total_level_sections * 100).round(1)
+undergrad_pct = df_level_totals.loc[df_level_totals['primary_level'] == 'Undergraduate', 'pct'].iloc[0]
+grad_total = df_level_totals.loc[df_level_totals['primary_level'] == 'Graduate', 'sections'].iloc[0] if 'Graduate' in df_level_totals['primary_level'].values else 0
+
+fig = go.Figure(go.Bar(
+    y=df_level_totals['primary_level'], x=df_level_totals['sections'], orientation='h',
+    text=[f"{row['sections']:,} ({row['pct']}%)" for _, row in df_level_totals.iterrows()],
+    textposition='outside',
+    marker_color=[level_colors_map.get(l, '#95a5a6') for l in df_level_totals['primary_level']]))
+fig.update_layout(template=TEMPLATE, title="Total Sections by Academic Level (All Semesters)",
+                  height=400, xaxis_title="Total Sections", margin=dict(r=140))
+charts['levels_dist'] = chart_html(fig, 'levels_dist')
+
+# Level mix by subject (percentage stacked bar)
+df_level_subj = pd.read_sql_query("""
+    SELECT c.subject, c.levels, COUNT(*) as sections
+    FROM courses c WHERE c.levels != ''
+    GROUP BY c.subject, c.levels
+""", conn)
+df_level_subj['primary_level'] = df_level_subj['levels'].apply(primary_level)
+df_level_subj_agg = df_level_subj.groupby(['subject', 'primary_level'])['sections'].sum().reset_index()
+top20_for_levels = df_level_subj_agg.groupby('subject')['sections'].sum().nlargest(20).index.tolist()
+df_lv_top = df_level_subj_agg[df_level_subj_agg['subject'].isin(top20_for_levels)]
+df_lv_pivot = df_lv_top.pivot_table(index='subject', columns='primary_level', values='sections', fill_value=0)
+df_lv_pct = df_lv_pivot.div(df_lv_pivot.sum(axis=1), axis=0) * 100
+sort_col = 'Graduate' if 'Graduate' in df_lv_pct.columns else df_lv_pct.columns[0]
+df_lv_pct = df_lv_pct.sort_values(sort_col, ascending=True)
+
+fig = go.Figure()
+for level in level_order:
+    if level in df_lv_pct.columns:
+        fig.add_trace(go.Bar(y=df_lv_pct.index, x=df_lv_pct[level],
+            name=level, orientation='h', marker_color=level_colors_map.get(level, '#95a5a6'),
+            hovertemplate="%{y}: %{x:.1f}%<extra>" + level + "</extra>"))
+fig.update_layout(template=TEMPLATE, title="Academic Level Mix by Subject (Top 20)",
+                  barmode='stack', height=600, xaxis_title="% of Sections",
+                  xaxis=dict(range=[0, 100]),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['levels_by_subject'] = chart_html(fig, 'levels_by_subject')
+
+# ===== NEW: Instructor Diversity Scatter =====
+fig = px.scatter(df_instructors.head(200), x='total_sections', y='subjects_taught',
+                 size='semesters_active', hover_name='instructor_name',
+                 color='semesters_active', color_continuous_scale=['#d4e6f1', '#1a5276'],
+                 labels={'total_sections': 'Total Sections Taught', 'subjects_taught': 'Distinct Subjects',
+                         'semesters_active': 'Semesters Active'},
+                 title="Instructor Teaching Diversity (Top 200 by Sections)")
+fig.update_layout(template=TEMPLATE, height=500,
+                  coloraxis_colorbar=dict(title="Semesters", thickness=15, len=0.5))
+charts['instructor_diversity'] = chart_html(fig, 'instructor_diversity')
+
+# Average sections per instructor over time
+df_inst_workload = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id,
+           COUNT(*) * 1.0 / COUNT(DISTINCT c.instructor_name) as avg_sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.instructor_name != '' AND c.instructor_name != 'TBA'
+    AND (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+    GROUP BY c.term_id ORDER BY c.term_id
+""", conn)
+fig = px.line(df_inst_workload, x='term_name', y='avg_sections',
+              title="Average Sections Per Instructor Per Semester",
+              labels={'avg_sections': 'Avg Sections/Instructor', 'term_name': 'Semester'},
+              color_discrete_sequence=[AUS_GOLD])
+fig.update_traces(line=dict(width=2.5))
+fig.update_layout(template=TEMPLATE, height=400, xaxis=dict(tickangle=-45, dtick=4))
+charts['instructor_workload'] = chart_html(fig, 'instructor_workload')
+
+# ===== NEW: Teaching Modality Over Time =====
+df_modality = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id, c.instructional_method, COUNT(*) as sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.instructional_method != ''
+    AND (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+    GROUP BY s.term_id, c.instructional_method ORDER BY s.term_id
+""", conn)
+
+def classify_modality(m):
+    m = str(m).strip()
+    if m == 'Traditional': return 'Traditional'
+    if 'Non-traditional' in m or 'Non Traditional' in m: return 'Non-Traditional'
+    if 'Blended' in m: return 'Blended'
+    if 'On-Line' in m or 'Online' in m: return 'Online'
+    return 'Other'
+
+df_modality['mode'] = df_modality['instructional_method'].apply(classify_modality)
+df_mod_agg = df_modality.groupby(['term_name', 'term_id', 'mode'])['sections'].sum().reset_index()
+modality_colors = {'Traditional': '#2471a3', 'Non-Traditional': '#c0392b', 'Blended': '#8e44ad',
+                   'Online': '#27ae60', 'Other': '#95a5a6'}
+
+# Calculate percentages for stacked bar
+df_mod_total = df_mod_agg.groupby(['term_name', 'term_id'])['sections'].sum().reset_index().rename(columns={'sections': 'total'})
+df_mod_merged = df_mod_agg.merge(df_mod_total)
+df_mod_merged['pct'] = (df_mod_merged['sections'] / df_mod_merged['total'] * 100).round(1)
+
+fig = go.Figure()
+for mode in ['Traditional', 'Non-Traditional', 'Blended', 'Online', 'Other']:
+    df_m = df_mod_merged[df_mod_merged['mode'] == mode].sort_values('term_id')
+    if len(df_m) > 0:
+        fig.add_trace(go.Bar(x=df_m['term_name'], y=df_m['pct'], name=mode,
+            marker_color=modality_colors.get(mode, '#95a5a6'),
+            hovertemplate="%{x}: %{y:.1f}%<extra>" + mode + "</extra>"))
+fig.update_layout(template=TEMPLATE, title="Teaching Modality Distribution Over Time (%)",
+                  barmode='stack', height=500, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="% of Sections", yaxis=dict(range=[0, 100]),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['modality_over_time'] = chart_html(fig, 'modality_over_time')
+
+# Non-traditional rate by subject
+df_nontrad_subj = pd.read_sql_query("""
+    SELECT c.subject,
+           SUM(CASE WHEN c.instructional_method != 'Traditional' AND c.instructional_method != '' THEN 1 ELSE 0 END) as nontrad,
+           COUNT(*) as total
+    FROM courses c WHERE c.instructional_method != ''
+    GROUP BY c.subject HAVING total >= 50
+""", conn)
+df_nontrad_subj['nontrad_pct'] = (df_nontrad_subj['nontrad'] / df_nontrad_subj['total'] * 100).round(1)
+df_nontrad_subj = df_nontrad_subj.sort_values('nontrad_pct', ascending=False).head(20)
+
+fig = px.bar(df_nontrad_subj, x='subject', y='nontrad_pct',
+             color='nontrad_pct', color_continuous_scale='RdYlBu_r',
+             hover_data=['nontrad', 'total'],
+             title="Non-Traditional Teaching Rate by Subject (Top 20)",
+             labels={'nontrad_pct': '% Non-Traditional', 'subject': 'Subject'})
+fig.update_layout(template=TEMPLATE, height=450)
+fig.update_coloraxes(showscale=False)
+charts['modality_by_subject'] = chart_html(fig, 'modality_by_subject')
+
+# Modality stats
+total_nontrad = df_modality[df_modality['mode'] != 'Traditional']['sections'].sum()
+total_modality = df_modality['sections'].sum()
+nontrad_overall_pct = round(total_nontrad / total_modality * 100, 1) if total_modality > 0 else 0
+
+# ===== NEW: COVID-19 Impact =====
+# Define COVID semesters
+covid_terms = ['Spring 2020', 'Fall 2020', 'Spring 2021']
+
+# Section counts: pre-COVID, COVID, post-COVID
+df_covid_sections = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id, COUNT(*) as sections,
+           COUNT(DISTINCT c.subject || c.course_number) as unique_courses,
+           COUNT(DISTINCT c.instructor_name) as instructors
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
+    GROUP BY c.term_id ORDER BY c.term_id
+""", conn)
+
+def covid_era(name):
+    if name in covid_terms: return 'COVID'
+    # Pre-COVID: before Spring 2020
+    for y in range(2005, 2020):
+        if str(y) in name: return 'Pre-COVID'
+    if 'Fall 2019' in name: return 'Pre-COVID'
+    return 'Post-COVID'
+
+df_covid_sections['era'] = df_covid_sections['term_name'].apply(covid_era)
+
+# Bar chart of sections per semester, colored by COVID era
+era_colors = {'Pre-COVID': '#2471a3', 'COVID': '#c0392b', 'Post-COVID': '#27ae60'}
+fig = go.Figure()
+for era in ['Pre-COVID', 'COVID', 'Post-COVID']:
+    df_e = df_covid_sections[df_covid_sections['era'] == era]
+    fig.add_trace(go.Bar(x=df_e['term_name'], y=df_e['sections'], name=era,
+        marker_color=era_colors[era]))
+fig.update_layout(template=TEMPLATE, title="Course Sections Per Semester: COVID Impact",
+                  height=500, xaxis=dict(tickangle=-45, dtick=4), yaxis_title="Sections",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['covid_sections'] = chart_html(fig, 'covid_sections')
+
+# COVID vs pre-COVID stats
+pre_covid_avg = df_covid_sections[df_covid_sections['era'] == 'Pre-COVID']['sections'].tail(6).mean()
+covid_avg = df_covid_sections[df_covid_sections['era'] == 'COVID']['sections'].mean()
+post_covid_avg = df_covid_sections[df_covid_sections['era'] == 'Post-COVID']['sections'].head(6).mean()
+covid_drop_pct = round((1 - covid_avg / pre_covid_avg) * 100, 1) if pre_covid_avg > 0 else 0
+covid_recovery_pct = round((post_covid_avg / pre_covid_avg - 1) * 100, 1) if pre_covid_avg > 0 else 0
+
+# Modality during COVID: absolute numbers
+df_covid_mod = df_mod_agg.copy()
+df_covid_mod['era'] = df_covid_mod['term_name'].apply(covid_era)
+df_covid_mod_era = df_covid_mod.groupby(['era', 'mode'])['sections'].sum().reset_index()
+df_covid_mod_total = df_covid_mod_era.groupby('era')['sections'].sum().reset_index().rename(columns={'sections': 'total'})
+df_covid_mod_era = df_covid_mod_era.merge(df_covid_mod_total)
+df_covid_mod_era['pct'] = (df_covid_mod_era['sections'] / df_covid_mod_era['total'] * 100).round(1)
+
+era_order = ['Pre-COVID', 'COVID', 'Post-COVID']
+fig = go.Figure()
+for mode in ['Traditional', 'Non-Traditional', 'Blended', 'Online', 'Other']:
+    df_m = df_covid_mod_era[df_covid_mod_era['mode'] == mode]
+    df_m = df_m.set_index('era').reindex(era_order).reset_index()
+    if df_m['pct'].sum() > 0:
+        fig.add_trace(go.Bar(x=df_m['era'], y=df_m['pct'], name=mode,
+            marker_color=modality_colors.get(mode, '#95a5a6'),
+            text=df_m['pct'].apply(lambda x: f'{x:.1f}%' if pd.notna(x) else ''),
+            textposition='inside'))
+fig.update_layout(template=TEMPLATE, title="Teaching Modality: Pre-COVID vs COVID vs Post-COVID (%)",
+                  barmode='stack', height=450,
+                  yaxis_title="% of Sections", yaxis=dict(range=[0, 100]),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['covid_modality'] = chart_html(fig, 'covid_modality')
+
+# COVID modality stats
+covid_nontrad = df_covid_mod_era[(df_covid_mod_era['era'] == 'COVID') & (df_covid_mod_era['mode'] == 'Non-Traditional')]
+covid_nontrad_pct = round(covid_nontrad['pct'].iloc[0], 1) if len(covid_nontrad) > 0 else 0
+precovid_nontrad = df_covid_mod_era[(df_covid_mod_era['era'] == 'Pre-COVID') & (df_covid_mod_era['mode'] == 'Non-Traditional')]
+precovid_nontrad_pct = round(precovid_nontrad['pct'].iloc[0], 1) if len(precovid_nontrad) > 0 else 0
+
+# Lab percentage during COVID
+df_covid_labs = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id,
+           ROUND(100.0 * SUM(CASE WHEN c.is_lab = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) as lab_pct,
+           SUM(CASE WHEN c.is_lab = 1 THEN 1 ELSE 0 END) as lab_count,
+           COUNT(*) as total
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
+    GROUP BY c.term_id ORDER BY c.term_id
+""", conn)
+df_covid_labs['era'] = df_covid_labs['term_name'].apply(covid_era)
+df_covid_labs['highlight'] = df_covid_labs['era'] == 'COVID'
+
+fig = go.Figure()
+fig.add_trace(go.Bar(
+    x=df_covid_labs[~df_covid_labs['highlight']]['term_name'],
+    y=df_covid_labs[~df_covid_labs['highlight']]['lab_pct'],
+    name='Normal', marker_color='#2471a3'))
+fig.add_trace(go.Bar(
+    x=df_covid_labs[df_covid_labs['highlight']]['term_name'],
+    y=df_covid_labs[df_covid_labs['highlight']]['lab_pct'],
+    name='COVID Era', marker_color='#c0392b'))
+fig.update_layout(template=TEMPLATE, title="Lab Section Percentage Over Time (COVID Highlighted)",
+                  height=400, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="% Lab Sections",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['covid_labs'] = chart_html(fig, 'covid_labs')
+
+# Subject-level COVID impact: which subjects shrank most
+df_subject_covid = pd.read_sql_query("""
+    SELECT c.subject, s.term_name, COUNT(*) as sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE s.term_name IN ('Fall 2019', 'Fall 2020', 'Spring 2020', 'Spring 2021', 'Fall 2021')
+    GROUP BY c.subject, s.term_name
+""", conn)
+df_pre = df_subject_covid[df_subject_covid['term_name'] == 'Fall 2019'].set_index('subject')['sections']
+df_during = df_subject_covid[df_subject_covid['term_name'] == 'Fall 2020'].set_index('subject')['sections']
+df_change = pd.DataFrame({'pre': df_pre, 'during': df_during}).dropna()
+df_change['change_pct'] = ((df_change['during'] / df_change['pre'] - 1) * 100).round(1)
+df_change = df_change[df_change['pre'] >= 10]  # Only subjects with enough sections
+df_change = df_change.sort_values('change_pct')
+
+fig = go.Figure(go.Bar(
+    y=df_change.index, x=df_change['change_pct'], orientation='h',
+    marker_color=[('#c0392b' if v < 0 else '#27ae60') for v in df_change['change_pct']],
+    text=[f"{v:+.1f}%" for v in df_change['change_pct']], textposition='outside'))
+fig.update_layout(template=TEMPLATE, title="Subject-Level Impact: Fall 2019 → Fall 2020 (% Change)",
+                  height=max(400, len(df_change) * 22), xaxis_title="% Change in Sections",
+                  margin=dict(r=80))
+charts['covid_subjects'] = chart_html(fig, 'covid_subjects')
+
+# ===== NEW: Curriculum Evolution =====
+df_first_offered = pd.read_sql_query("""
+    SELECT c.subject, c.course_number, MIN(s.term_id) as first_term_id,
+           MIN(s.term_name) as first_term_name,
+           COUNT(DISTINCT c.term_id) as semesters_offered,
+           MAX(s.term_id) as last_term_id,
+           MAX(s.term_name) as last_term_name
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    GROUP BY c.subject, c.course_number
+""", conn)
+
+# New courses per year
+df_first_offered['first_year'] = df_first_offered['first_term_id'].astype(str).str[:4].astype(int)
+df_new_per_year = df_first_offered.groupby('first_year').size().reset_index(name='new_courses')
+
+fig = px.bar(df_new_per_year, x='first_year', y='new_courses',
+             title="New Courses Introduced Per Year",
+             labels={'first_year': 'Year', 'new_courses': 'New Courses'},
+             color='new_courses', color_continuous_scale='Teal')
+fig.update_layout(template=TEMPLATE, height=400)
+fig.update_coloraxes(showscale=False)
+charts['new_courses'] = chart_html(fig, 'new_courses')
+
+peak_new_year = int(df_new_per_year.loc[df_new_per_year['new_courses'].idxmax(), 'first_year'])
+peak_new_count = int(df_new_per_year['new_courses'].max())
+
+# Course longevity histogram
+fig = px.histogram(df_first_offered, x='semesters_offered', nbins=40,
+                   title="Course Longevity: How Many Semesters Is Each Course Offered?",
+                   labels={'semesters_offered': 'Semesters Offered', 'count': 'Courses'},
+                   color_discrete_sequence=[AUS_GOLD])
+fig.update_layout(template=TEMPLATE, height=400)
+charts['course_longevity'] = chart_html(fig, 'course_longevity')
+
+one_sem_courses = int(len(df_first_offered[df_first_offered['semesters_offered'] == 1]))
+total_unique_courses = int(len(df_first_offered))
+one_sem_pct = round(one_sem_courses / total_unique_courses * 100, 1)
+veteran_courses = int(len(df_first_offered[df_first_offered['semesters_offered'] >= 30]))
+
+# Most consistently offered courses
+df_consistent = df_first_offered.nlargest(20, 'semesters_offered').sort_values('semesters_offered', ascending=True)
+df_consistent['label'] = df_consistent['subject'] + ' ' + df_consistent['course_number']
+
+fig = px.bar(df_consistent, y='label', x='semesters_offered', orientation='h',
+             title="Most Consistently Offered Courses (by Semesters Active)",
+             labels={'label': '', 'semesters_offered': 'Semesters Offered'},
+             color='semesters_offered', color_continuous_scale=['#d4e6f1', '#1a5276'])
+fig.update_layout(template=TEMPLATE, height=550)
+fig.update_coloraxes(showscale=False)
+charts['most_consistent'] = chart_html(fig, 'most_consistent')
+
+# Courses discontinued (appeared in 2005-2015 but not after 2020)
+max_term_id = int(df_first_offered['last_term_id'].max())
+df_discontinued = df_first_offered[
+    (df_first_offered['first_term_id'].astype(int) < 201500) &
+    (df_first_offered['last_term_id'].astype(int) < 202000) &
+    (df_first_offered['semesters_offered'] >= 5)
+].copy()
+df_discontinued['last_year'] = df_discontinued['last_term_id'].astype(str).str[:4].astype(int)
+df_disc_per_year = df_discontinued.groupby('last_year').size().reset_index(name='discontinued')
+
+fig = px.bar(df_disc_per_year, x='last_year', y='discontinued',
+             title="Courses Last Offered Per Year (Courses Not Seen After 2020)",
+             labels={'last_year': 'Last Year Offered', 'discontinued': 'Courses'},
+             color='discontinued', color_continuous_scale='OrRd')
+fig.update_layout(template=TEMPLATE, height=400)
+fig.update_coloraxes(showscale=False)
+charts['courses_discontinued'] = chart_html(fig, 'courses_discontinued')
+
+total_discontinued = int(len(df_discontinued))
+
+# ===== NEW: Corequisites =====
+df_coreqs = pd.read_sql_query("""
+    SELECT DISTINCT c.subject as course_subject, c.course_number as course_num,
+        d.subject as dep_subject, d.course_number as dep_num
+    FROM course_dependencies d
+    JOIN courses c ON c.crn = d.crn AND c.term_id = d.term_id
+    WHERE d.dep_type = 'corequisite'
+""", conn)
+
+# Top corequisite connections
+coreq_counter = Counter()
+for _, row in df_coreqs.iterrows():
+    pair = tuple(sorted([f"{row['course_subject']} {row['course_num']}",
+                         f"{row['dep_subject']} {row['dep_num']}"]))
+    coreq_counter[pair] += 1
+
+top_coreqs = coreq_counter.most_common(20)
+if top_coreqs:
+    coreq_labels = [f"{p[0]}  \u2194  {p[1]}" for p, _ in top_coreqs]
+    coreq_counts = [c for _, c in top_coreqs]
+    fig = go.Figure(go.Bar(y=coreq_labels[::-1], x=coreq_counts[::-1], orientation='h',
+        marker_color='#8e44ad',
+        hovertemplate="%{y}: %{x} links<extra></extra>"))
+    fig.update_layout(template=TEMPLATE, title="Most Common Corequisite Pairs",
+                      height=550, xaxis_title="Occurrences", margin=dict(l=300))
+    charts['coreq_top'] = chart_html(fig, 'coreq_top')
+
+# Coreqs vs prereqs by department
+df_dep_compare = pd.read_sql_query("""
+    SELECT c.subject, d.dep_type, COUNT(DISTINCT d.subject || d.course_number) as dep_count
+    FROM course_dependencies d
+    JOIN courses c ON c.crn = d.crn AND c.term_id = d.term_id
+    GROUP BY c.subject, d.dep_type
+""", conn)
+df_dep_pvt = df_dep_compare.pivot_table(index='subject', columns='dep_type', values='dep_count', fill_value=0).reset_index()
+if 'prerequisite' in df_dep_pvt.columns and 'corequisite' in df_dep_pvt.columns:
+    df_dep_pvt['total'] = df_dep_pvt['prerequisite'] + df_dep_pvt['corequisite']
+    df_dep_pvt = df_dep_pvt.nlargest(20, 'total').sort_values('total', ascending=True)
+    fig = go.Figure()
+    fig.add_trace(go.Bar(y=df_dep_pvt['subject'], x=df_dep_pvt['prerequisite'],
+        name='Prerequisites', orientation='h', marker_color='#e74c3c'))
+    fig.add_trace(go.Bar(y=df_dep_pvt['subject'], x=df_dep_pvt['corequisite'],
+        name='Corequisites', orientation='h', marker_color='#8e44ad'))
+    fig.update_layout(template=TEMPLATE, title="Prerequisites vs Corequisites by Department (Top 20)",
+                      barmode='group', height=550, xaxis_title="Unique Required Courses",
+                      legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+    charts['coreq_vs_prereq'] = chart_html(fig, 'coreq_vs_prereq')
+
+total_coreq_links = int(len(df_coreqs))
+
+# ===== NEW: Course Attributes =====
+df_attr_raw = pd.read_sql_query("""
+    SELECT c.subject, c.course_number, c.attributes, s.term_name, s.term_id, COUNT(*) as sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.attributes != ''
+    GROUP BY c.subject, c.course_number, c.attributes, s.term_id
+""", conn)
+
+attr_counts = Counter()
+for _, row in df_attr_raw.iterrows():
+    for attr in str(row['attributes']).split(', '):
+        attr = attr.strip()
+        if attr:
+            attr_counts[attr] += row['sections']
+
+df_attrs = pd.DataFrame(attr_counts.most_common(25), columns=['attribute', 'sections'])
+
+fig = px.bar(df_attrs.sort_values('sections', ascending=True),
+             y='attribute', x='sections', orientation='h',
+             title="Top 25 Course Attributes / Gen-Ed Tags",
+             labels={'sections': 'Total Section-Occurrences', 'attribute': ''},
+             color='sections', color_continuous_scale='Viridis')
+fig.update_layout(template=TEMPLATE, height=650, margin=dict(l=300))
+fig.update_coloraxes(showscale=False)
+charts['attributes_dist'] = chart_html(fig, 'attributes_dist')
+
+# Attribute categories over time
+def categorize_attr(attr):
+    a = attr.lower()
+    if 'science' in a and 'social' not in a: return 'Natural Sciences'
+    if 'social science' in a: return 'Social Sciences'
+    if 'math' in a or 'stat' in a: return 'Math/Statistics'
+    if 'communication' in a or 'english' in a or 'language' in a: return 'Communication/English'
+    if 'arabic' in a or 'heritage' in a or 'humanities' in a or 'history' in a: return 'Humanities/Arabic'
+    if 'art' in a or 'literature' in a: return 'Arts & Literature'
+    if 'preparatory' in a: return 'Preparatory'
+    if 'internship' in a: return 'Internship'
+    if 'elective' in a: return 'Elective'
+    return 'Other'
+
+attr_time_data = []
+for _, row in df_attr_raw.iterrows():
+    year = int(str(row['term_id'])[:4])
+    for attr in str(row['attributes']).split(', '):
+        attr = attr.strip()
+        if attr:
+            attr_time_data.append({'year': year, 'category': categorize_attr(attr), 'sections': row['sections']})
+
+df_attr_time = pd.DataFrame(attr_time_data)
+df_attr_time_agg = df_attr_time.groupby(['year', 'category'])['sections'].sum().reset_index()
+
+cat_colors = {'Natural Sciences': '#27ae60', 'Social Sciences': '#e67e22', 'Math/Statistics': '#2471a3',
+              'Communication/English': '#c0392b', 'Humanities/Arabic': '#8e44ad', 'Arts & Literature': '#1abc9c',
+              'Preparatory': '#d68910', 'Internship': '#16a085', 'Elective': '#95a5a6', 'Other': '#bdc3c7'}
+
+fig = go.Figure()
+for cat in ['Natural Sciences', 'Social Sciences', 'Math/Statistics', 'Communication/English',
+            'Humanities/Arabic', 'Arts & Literature', 'Preparatory', 'Internship', 'Elective']:
+    df_c = df_attr_time_agg[df_attr_time_agg['category'] == cat].sort_values('year')
+    if len(df_c) > 0:
+        fig.add_trace(go.Scatter(x=df_c['year'], y=df_c['sections'],
+            name=cat, mode='lines', stackgroup='one',
+            line=dict(color=cat_colors.get(cat, '#95a5a6'), width=0.5)))
+fig.update_layout(template=TEMPLATE, title="Gen-Ed / Course Attribute Categories Over Time",
+                  height=500, xaxis_title="Year", yaxis_title="Tagged Sections",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)))
+charts['attributes_over_time'] = chart_html(fig, 'attributes_over_time')
+
+total_unique_attrs = len(attr_counts)
+
+# ===== NEW: Enrollment Restrictions =====
+df_restrictions = pd.read_sql_query("""
+    SELECT sd.restrictions, COUNT(*) as sections
+    FROM section_details sd
+    WHERE sd.restrictions != ''
+    GROUP BY sd.restrictions
+""", conn)
+
+def categorize_restriction(r):
+    r_lower = str(r).lower()
+    if 'level' in r_lower and 'undergraduate' in r_lower and 'graduate' not in r_lower: return 'Undergraduate Only'
+    if 'level' in r_lower and 'graduate' in r_lower and 'undergraduate' not in r_lower: return 'Graduate Only'
+    if 'level' in r_lower: return 'Level Restriction (Mixed)'
+    if 'major' in r_lower or 'program' in r_lower: return 'Major/Program'
+    if 'college' in r_lower or 'school' in r_lower: return 'College/School'
+    if 'class' in r_lower or 'standing' in r_lower: return 'Class Standing'
+    if 'department' in r_lower: return 'Department'
+    return 'Other'
+
+restriction_cats = Counter()
+for _, row in df_restrictions.iterrows():
+    cat = categorize_restriction(row['restrictions'])
+    restriction_cats[cat] += row['sections']
+
+df_restrict = pd.DataFrame(restriction_cats.most_common(), columns=['category', 'sections'])
+df_restrict['pct'] = (df_restrict['sections'] / df_restrict['sections'].sum() * 100).round(1)
+
+fig = px.pie(df_restrict, values='sections', names='category',
+             title="Types of Enrollment Restrictions",
+             color_discrete_sequence=px.colors.qualitative.Set2)
+fig.update_traces(textposition='inside', textinfo='percent+label')
+fig.update_layout(template=TEMPLATE, height=450)
+charts['restriction_types'] = chart_html(fig, 'restriction_types')
+
+total_restricted = int(df_restrictions['sections'].sum())
+restricted_pct = round(total_restricted / table_counts['section_details'] * 100, 1)
+
 conn.close()
 
 # ---------------------------------------------------------------------------
@@ -690,6 +1217,46 @@ df_cat_browse = pd.read_sql_query("""
            lab_hours, department FROM catalog ORDER BY subject, course_number
 """, conn2)
 catalog_json = df_cat_browse.to_json(orient="records")
+
+# Build compact dependency data for Course Dependency Explorer
+dep_data = {}
+for node in G.nodes():
+    dep_data[node] = {
+        'p': [{'c': pred, 'g': G.edges[pred, node].get('grade', '')}
+              for pred in G.predecessors(node)],
+        'n': list(G.successors(node))
+    }
+# Add corequisites from df_coreqs
+for _, row in df_coreqs.iterrows():
+    course = f"{row['course_subject']} {row['course_num']}"
+    coreq = f"{row['dep_subject']} {row['dep_num']}"
+    if course in dep_data:
+        dep_data[course].setdefault('q', []).append(coreq)
+    else:
+        dep_data[course] = {'p': [], 'n': [], 'q': [coreq]}
+dep_explorer_json = json.dumps(dep_data)
+
+# Build instructor data for Instructor Career Explorer
+df_inst_detail = pd.read_sql_query("""
+    SELECT c.instructor_name, c.subject, c.course_number, c.title, s.term_name, s.term_id
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.instructor_name != '' AND c.instructor_name != 'TBA'
+    ORDER BY s.term_id
+""", conn2)
+
+inst_data = {}
+for name, group in df_inst_detail.groupby('instructor_name'):
+    top_courses = group.groupby(['subject', 'course_number']).agg(
+        title=('title', 'first'), times=('term_id', 'count')).reset_index().nlargest(10, 'times')
+    inst_data[name] = {
+        't': int(len(group)),
+        's': sorted(group['subject'].unique().tolist()),
+        'n': int(group['term_id'].nunique()),
+        'f': group['term_name'].iloc[0],
+        'l': group['term_name'].iloc[-1],
+        'c': [[r['subject'], r['course_number'], r['title'], int(r['times'])] for _, r in top_courses.iterrows()]
+    }
+inst_explorer_json = json.dumps(inst_data)
 
 conn2.close()
 
@@ -1211,6 +1778,10 @@ footer p {{ margin-top: 0.3rem; }}
         <div class="stat-value">{table_counts['course_dependencies']:,}</div>
         <div class="stat-label">Dependencies</div>
       </div>
+      <div class="stat">
+        <div class="stat-value">{len(charts)}</div>
+        <div class="stat-label">Charts</div>
+      </div>
     </div>
   </div>
 </div>
@@ -1221,10 +1792,15 @@ footer p {{ margin-top: 0.3rem; }}
     <a href="#" class="nav-brand">VisualizeAUS</a>
     <a href="#growth">Growth</a>
     <a href="#subjects">Subjects</a>
+    <a href="#levels">Levels</a>
     <a href="#instructors">Instructors</a>
+    <a href="#modality">Modality</a>
+    <a href="#covid">COVID</a>
     <a href="#schedule">Schedule</a>
+    <a href="#curriculum">Curriculum</a>
     <a href="#prerequisites">Prerequisites</a>
     <a href="#grades">Grades</a>
+    <a href="#attributes">Attributes</a>
     <a href="#catalog">Catalog</a>
     <a href="#enrollment">Enrollment</a>
     <a href="#browse">Browse</a>
@@ -1236,95 +1812,189 @@ footer p {{ margin-top: 0.3rem; }}
 <!-- 1. Growth -->
 <section id="growth">
   <div class="section-header">
-    <div class="section-num">01 — University Growth</div>
+    <div class="section-num">01 &mdash; University Growth</div>
     <h2>Two Decades of Expansion</h2>
     <p>How has AUS grown its course offerings from 2005 to 2026?</p>
   </div>
   <div class="chart-container">{charts['growth']}</div>
   <div class="explanation">
-    Each dot represents one semester. <strong>Red dots are Fall semesters</strong>, blue are Spring, and green are Summer terms. The dashed line shows the overall upward trend. AUS has grown from about 1,100 course sections per regular semester in 2005 to nearly 2,000 in 2025 — a <strong>{growth_pct:.0f}% increase</strong>. The peak was <strong>{peak_sem}</strong> with {peak_val:,} sections. Summer terms are much smaller (200-400 sections) and appear as the lower cluster.
+    Each dot represents one semester. <strong>Red dots are Fall semesters</strong>, blue are Spring, and green are Summer terms. The dashed line shows the overall upward trend. AUS has grown from about 1,100 course sections per regular semester in 2005 to nearly 2,000 in 2025 &mdash; a <strong>{growth_pct:.0f}% increase</strong>. The peak was <strong>{peak_sem}</strong> with {peak_val:,} sections. Summer terms are much smaller (200-400 sections) and appear as the lower cluster.
   </div>
   <div class="chart-container">{charts['courses_vs_sections']}</div>
   <div class="explanation">
-    The blue line tracks total sections offered, while the red line tracks unique courses. Both have grown, but total sections grew faster — meaning AUS is offering <strong>more sections of existing courses</strong> (to accommodate more students) in addition to introducing new ones. On average, each unique course has about 2.2 sections per semester.
+    The blue line tracks total sections offered, while the red line tracks unique courses. Both have grown, but total sections grew faster &mdash; meaning AUS is offering <strong>more sections of existing courses</strong> (to accommodate more students) in addition to introducing new ones.
   </div>
 </section>
 
 <!-- 2. Subjects -->
 <section id="subjects">
   <div class="section-header">
-    <div class="section-num">02 — Subject Analysis</div>
+    <div class="section-num">02 &mdash; Subject Analysis</div>
     <h2>What Does AUS Teach?</h2>
     <p>{table_counts['subjects']} subject areas spanning engineering, sciences, arts, and humanities.</p>
   </div>
   <div class="chart-container">{charts['subjects_bar']}</div>
   <div class="explanation">
-    Mathematics (MTH) has the most sections of any subject — over 5,500 across 20 years — because nearly every student at AUS takes multiple math courses regardless of major. The next largest subjects are Civil Engineering (CVE), Mechanical Engineering (MCE), and Electrical Engineering (ELE), reflecting AUS's strong engineering focus. The <strong>top 10 subjects account for nearly half</strong> of all sections ever offered.
+    Mathematics (MTH) has the most sections of any subject &mdash; over 5,500 across 20 years &mdash; because nearly every student takes multiple math courses. The next largest subjects are Civil Engineering (CVE), Mechanical Engineering (MCE), and Electrical Engineering (ELE), reflecting AUS's strong engineering focus.
   </div>
   <div class="chart-container">{charts['subject_lines']}</div>
   <div class="explanation">
-    This shows how the <strong>top 10 subjects</strong> have evolved semester by semester. Most subjects show steady or growing offerings. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion. Some subjects show notable inflection points around 2010-2012, likely reflecting curriculum changes.
+    This shows how the <strong>top 10 subjects</strong> have evolved semester by semester. Most subjects show steady or growing offerings. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion.
   </div>
   <div class="chart-container">{charts['subject_heatmap']}</div>
   <div class="explanation">
-    Each cell shows the number of sections a subject offered in a given year. <strong>Darker red means more sections.</strong> You can see the overall growth pattern clearly — most subjects get darker (more sections) as you move from left to right. Gaps or lighter spots can indicate years where a subject reduced offerings or was restructured.
+    Each cell shows the number of sections a subject offered in a given year. <strong>Darker red means more sections.</strong> You can see the overall growth pattern clearly &mdash; most subjects get darker as you move from left to right.
   </div>
 </section>
 
-<!-- 3. Instructors -->
+<!-- 3. Academic Levels -->
+<section id="levels">
+  <div class="section-header">
+    <div class="section-num">03 &mdash; Academic Levels</div>
+    <h2>Undergraduate, Graduate, and Beyond</h2>
+    <p>AUS offers courses across {len(level_order)} academic levels, from undergraduate to doctorate.</p>
+  </div>
+  <div class="chart-container">{charts['levels_over_time']}</div>
+  <div class="explanation">
+    This stacked area chart shows how enrollment across different academic levels has evolved over 20 years. <strong>Undergraduate sections dominate at {undergrad_pct:.0f}%</strong> of all offerings. The Graduate program has been present since 2005, while the <strong>Doctorate program launched in 2019</strong> and the Achievement Academy started in 2011. Notice how all levels have grown over time, with the undergraduate base expanding steadily.
+  </div>
+  <div class="chart-container">{charts['levels_dist']}</div>
+  <div class="explanation">
+    The distribution across all semesters shows the massive dominance of undergraduate education at AUS, with graduate sections being the second largest category at {grad_total:,} total sections. Specialized programs like the Doctorate and Achievement Academy are smaller but growing.
+  </div>
+  <div class="chart-container">{charts['levels_by_subject']}</div>
+  <div class="explanation">
+    This reveals which subjects serve multiple academic levels. Subjects at the top have the highest proportion of graduate-level sections. Some subjects like MBA and certain engineering programs serve a significant graduate population, while others like MTH and PHY are almost exclusively undergraduate.
+  </div>
+</section>
+
+<!-- 4. Instructors -->
 <section id="instructors">
   <div class="section-header">
-    <div class="section-num">03 — Instructor Analysis</div>
+    <div class="section-num">04 &mdash; Instructor Analysis</div>
     <h2>The Teaching Workforce</h2>
     <p>{table_counts['instructors']:,} unique instructors have taught at AUS since 2005.</p>
   </div>
   <div class="chart-container">{charts['instructors']}</div>
   <div class="explanation">
-    The most prolific instructor has taught <strong>nearly 500 sections</strong> over their career at AUS. The color indicates how many semesters they've been active — darker blue means a longer tenure. Many of the top instructors have been active for 30+ semesters (15+ years), suggesting a stable core faculty.
+    The most prolific instructor has taught <strong>nearly 500 sections</strong> over their career at AUS. The color indicates how many semesters they've been active &mdash; darker blue means a longer tenure.
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['tenure']}</div>
     <div class="chart-container">{charts['active_instructors']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> Most instructors teach for a relatively short time — the histogram is heavily skewed toward 1-5 semesters. However, a significant number have been active for 20+ semesters (10+ years), forming the experienced backbone of AUS's faculty. <strong>Right:</strong> The number of active instructors per semester has grown from about 300 in 2005 to over 500 in recent years, tracking the university's overall expansion.
+    <strong>Left:</strong> Most instructors teach for a relatively short time &mdash; the histogram is heavily skewed toward 1-5 semesters. However, a significant number have been active for 20+ semesters (10+ years). <strong>Right:</strong> The number of active instructors has grown from about 300 in 2005 to over 500 in recent years.
   </div>
-  <div class="chart-container">{charts['tba_rate']}</div>
+  <div class="chart-container">{charts['instructor_diversity']}</div>
   <div class="explanation">
-    The "TBA rate" is the percentage of sections each semester where no instructor was assigned at the time the data was scraped. <strong>A high TBA rate (especially in recent semesters) often means instructors haven't been finalized yet</strong> rather than that sections are truly unstaffed. Spring 2026, for example, may still have high TBA because the semester was upcoming when this data was collected.
+    Each bubble represents an instructor. The x-axis shows total sections taught, the y-axis shows how many distinct subjects they teach, and the size reflects their tenure. <strong>Instructors in the upper-right are both prolific and versatile</strong> &mdash; teaching many sections across multiple subjects. Most instructors cluster in the lower-left (few sections, 1-2 subjects), while a handful of "superstar" instructors stand out.
+  </div>
+  <div class="chart-row">
+    <div class="chart-container">{charts['tba_rate']}</div>
+    <div class="chart-container">{charts['instructor_workload']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> The TBA rate shows the percentage of sections each semester where no instructor was assigned at scrape time. High TBA in recent semesters often means instructors haven't been finalized yet. <strong>Right:</strong> The average number of sections per instructor per semester has remained relatively stable, hovering around 3-4 sections, showing consistent workload distribution.
   </div>
 </section>
 
-<!-- 4. Schedule -->
+<!-- 5. Teaching Modality -->
+<section id="modality">
+  <div class="section-header">
+    <div class="section-num">05 &mdash; Teaching Modality</div>
+    <h2>How Is AUS Teaching?</h2>
+    <p>Traditional vs. non-traditional instruction across {table_counts['semesters']} semesters. Overall non-traditional rate: {nontrad_overall_pct}%.</p>
+  </div>
+  <div class="chart-container">{charts['modality_over_time']}</div>
+  <div class="explanation">
+    This chart shows the evolution of teaching methods at AUS. <strong>Traditional (in-person) instruction dominates</strong> across almost every semester. The most dramatic shift occurred during <strong>COVID-19 (2020-2021)</strong>, when non-traditional delivery surged. After the pandemic, AUS largely returned to traditional methods, though some non-traditional instruction persists.
+  </div>
+  <div class="chart-container">{charts['modality_by_subject']}</div>
+  <div class="explanation">
+    Not all subjects adopted non-traditional teaching equally. This chart shows which subjects had the highest proportion of non-traditional sections across all time. Some subjects naturally lend themselves to online/blended formats, while others (especially lab-heavy engineering and science courses) remained largely in-person.
+  </div>
+</section>
+
+<!-- 6. COVID-19 Impact -->
+<section id="covid">
+  <div class="section-header">
+    <div class="section-num">06 &mdash; COVID-19 Impact</div>
+    <h2>The Pandemic Disruption</h2>
+    <p>How did COVID-19 reshape teaching at AUS during Spring 2020 through Spring 2021?</p>
+  </div>
+  <div class="chart-container">{charts['covid_sections']}</div>
+  <div class="explanation">
+    This chart highlights the COVID era (red bars) against the pre-pandemic baseline (blue) and post-pandemic recovery (green). {'Section counts dropped by about ' + str(abs(covid_drop_pct)) + '% during COVID semesters compared to the pre-pandemic average.' if covid_drop_pct > 0 else 'Remarkably, section counts held relatively steady during COVID.'} Post-pandemic, AUS {'has exceeded pre-COVID levels' if covid_recovery_pct > 0 else 'is recovering toward pre-COVID levels'}.
+  </div>
+  <div class="chart-container">{charts['covid_modality']}</div>
+  <div class="explanation">
+    The most dramatic COVID impact was on <strong>teaching modality</strong>. Before COVID, non-traditional instruction was just {precovid_nontrad_pct}% of sections. During COVID, it surged to <strong>{covid_nontrad_pct}%</strong>. Post-COVID, AUS largely returned to traditional instruction, showing the university's preference for in-person education once safe to do so.
+  </div>
+  <div class="chart-row">
+    <div class="chart-container">{charts['covid_labs']}</div>
+    <div class="chart-container">{charts['covid_subjects']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> Lab sections as a percentage of total sections. COVID semesters (red bars) may show changes in lab offerings as hands-on instruction was particularly challenging during lockdowns. <strong>Right:</strong> Subject-level impact comparing Fall 2019 to Fall 2020. Red bars indicate subjects that shrank, green bars show growth. Some subjects were more resilient to the disruption than others.
+  </div>
+</section>
+
+<!-- 7. Schedule -->
 <section id="schedule">
   <div class="section-header">
-    <div class="section-num">04 — Schedule Patterns</div>
+    <div class="section-num">07 &mdash; Schedule Patterns</div>
     <h2>When Does AUS Have Class?</h2>
     <p>AUS follows a UAE schedule: classes run Sunday through Thursday, with Saturday occasionally used.</p>
   </div>
   <div class="chart-container">{charts['schedule_heatmap']}</div>
   <div class="explanation">
-    This heatmap shows <strong>how many course sections are scheduled at each day-time combination</strong> across all 20 years. The busiest slots are clearly visible as deep red: <strong>Monday and Wednesday around 11:00 AM and 2:00 PM</strong> are the most popular. Sunday through Thursday are the main teaching days (the UAE work week). Saturday is rarely used. Notice that 8:00 AM slots are relatively light — early mornings are less popular for scheduling.
+    This heatmap shows <strong>how many course sections are scheduled at each day-time combination</strong> across all 20 years. The busiest slots are <strong>Monday and Wednesday around 11:00 AM and 2:00 PM</strong>. Sunday through Thursday are the main teaching days (the UAE work week).
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['day_patterns']}</div>
     <div class="chart-container">{charts['buildings']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The two dominant scheduling patterns are <strong>Mon/Wed (MW)</strong> — typically 75-minute blocks — and <strong>Tue/Thu/Sun (TRU)</strong> — typically 50-minute blocks. Together these account for over half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections by far, followed by the Language Building and Engineering Building Right (EB2). This reflects the campus layout where general-purpose lecture halls are concentrated in NAB1.
+    <strong>Left:</strong> The two dominant scheduling patterns are <strong>Mon/Wed (MW)</strong> and <strong>Tue/Thu/Sun (TRU)</strong>, together accounting for over half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections, followed by the Language Building and Engineering Building Right.
   </div>
 </section>
 
-<!-- 5. Prerequisites -->
+<!-- 8. Curriculum Evolution -->
+<section id="curriculum">
+  <div class="section-header">
+    <div class="section-num">08 &mdash; Curriculum Evolution</div>
+    <h2>How the Curriculum Has Changed</h2>
+    <p>{total_unique_courses:,} unique courses tracked across 20 years of offerings.</p>
+  </div>
+  <div class="chart-container">{charts['new_courses']}</div>
+  <div class="explanation">
+    This shows how many completely new courses were introduced each year. The peak was <strong>{peak_new_year}</strong> with <strong>{peak_new_count} new courses</strong>. The early years (2005-2008) show high counts because the database starts in 2005 &mdash; many courses that already existed appear as "new" in the first captured year. After that baseline, the rate of new course introduction reveals genuine curriculum expansion.
+  </div>
+  <div class="chart-container">{charts['course_longevity']}</div>
+  <div class="explanation">
+    How long do courses survive in the catalog? <strong>{one_sem_courses} courses ({one_sem_pct}%) were offered in only one semester</strong> &mdash; these are likely special topics, experimental courses, or one-off offerings. Meanwhile, <strong>{veteran_courses} courses have been offered for 30+ semesters</strong> (15+ years), forming the stable core of the AUS curriculum.
+  </div>
+  <div class="chart-container">{charts['most_consistent']}</div>
+  <div class="explanation">
+    These are the marathon runners of the AUS curriculum &mdash; courses that have been offered the most semesters. Foundational courses in math, English, physics, and engineering dominate this list, as they serve the widest student populations.
+  </div>
+  <div class="chart-container">{charts['courses_discontinued']}</div>
+  <div class="explanation">
+    This shows courses that were last offered before 2020 (having previously been offered for at least 5 semesters). These are <strong>{total_discontinued} courses that appear to have been discontinued</strong> &mdash; removed from the active curriculum. Spikes in certain years may correspond to department restructuring or program changes.
+  </div>
+</section>
+
+<!-- 9. Prerequisites -->
 <section id="prerequisites">
   <div class="section-header">
-    <div class="section-num">05 — Prerequisite Network</div>
+    <div class="section-num">09 &mdash; Prerequisite Network</div>
     <h2>The Dependency Web</h2>
-    <p>{G.number_of_nodes()} courses connected by {G.number_of_edges()} prerequisite edges.</p>
+    <p>{G.number_of_nodes()} courses connected by {G.number_of_edges()} prerequisite edges and {total_coreq_links:,} corequisite links.</p>
   </div>
   <div class="chart-container">{charts['prereq_connected']}</div>
   <div class="explanation">
-    This chart shows the <strong>most connected courses in the prerequisite graph</strong>. Red bars show how many other courses list this course as a prerequisite ("is prerequisite for"), while blue bars show how many prerequisites the course itself requires. Foundational courses like introductory math, physics, and programming have enormous outgoing connections — dozens of upper-level courses depend on them.
+    Red bars show how many other courses list this course as a prerequisite, while blue bars show how many prerequisites it requires. Foundational courses like intro math, physics, and programming have enormous outgoing connections.
   </div>
 
   <h3 class="chains-title">Longest Prerequisite Chains</h3>
@@ -1335,39 +2005,66 @@ footer p {{ margin-top: 0.3rem; }}
 
   <div class="chart-container" style="margin-top: 2rem">{charts['coe_network']}</div>
   <div class="explanation">
-    This interactive network graph shows all <strong>Computer Engineering (COE) courses</strong> and their prerequisites. Red nodes are COE courses; blue nodes are prerequisites from other departments (like MTH, PHY, CMP). The size of each node reflects how many connections it has. You can see how foundational courses in math and physics feed into the COE curriculum, and how upper-level COE courses form deep chains. Hover over nodes to see course names.
+    This interactive network graph shows all <strong>Computer Engineering (COE) courses</strong> and their prerequisites. Red nodes are COE courses; blue nodes are prerequisites from other departments. Hover over nodes to see course names.
   </div>
-  <div class="chart-container">{charts['prereq_complexity']}</div>
-  <div class="explanation">
-    This compares departments by how many prerequisites their courses require on average. <strong>A higher bar means more prerequisite requirements per course</strong> in that department. Engineering and science departments tend to have the most complex prerequisite structures, reflecting the sequential nature of technical curricula. Arts and humanities subjects typically have fewer formal prerequisites.
+  <div class="chart-row">
+    <div class="chart-container">{charts['prereq_complexity']}</div>
+    <div class="chart-container">{charts['cross_dept']}</div>
   </div>
-  <div class="chart-container">{charts['cross_dept']}</div>
   <div class="explanation">
-    This matrix shows <strong>which departments depend on which other departments</strong> for prerequisites. Read it as: courses in the row department require prerequisites from the column department. Strong off-diagonal cells indicate heavy cross-department dependencies. For example, many engineering departments depend heavily on MTH (Mathematics) and PHY (Physics) courses. The darker the blue, the more courses have that cross-department dependency.
+    <strong>Left:</strong> Departments ranked by average prerequisites per course. Engineering and science departments have the most complex prerequisite structures. <strong>Right:</strong> A matrix showing which departments depend on which others for prerequisites. Many engineering departments depend heavily on MTH and PHY courses.
+  </div>
+
+  <h3 class="chains-title">Corequisite Analysis</h3>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">Corequisites are courses that must be taken simultaneously. AUS has <strong>{total_coreq_links:,}</strong> corequisite links across the curriculum.</p>
+  {'<div class="chart-container">' + charts.get("coreq_top", "") + '</div>' if "coreq_top" in charts else ""}
+  <div class="explanation">
+    The most common corequisite pairs are typically lecture-lab combinations (e.g., a physics lecture with its corresponding lab). These mandatory pairings ensure students get both theoretical and practical instruction simultaneously.
+  </div>
+  {'<div class="chart-container">' + charts.get("coreq_vs_prereq", "") + '</div>' if "coreq_vs_prereq" in charts else ""}
+  <div class="explanation">
+    This compares the number of prerequisite vs corequisite requirements by department. Most departments rely more heavily on prerequisites, but some (especially lab-intensive programs) have significant corequisite requirements.
   </div>
 </section>
 
-<!-- 6. Grades -->
+<!-- 10. Grades -->
 <section id="grades">
   <div class="section-header">
-    <div class="section-num">06 — Grade Requirements</div>
+    <div class="section-num">10 &mdash; Grade Requirements</div>
     <h2>Academic Rigor</h2>
     <p>What minimum grades do prerequisites require, and how strict are different departments?</p>
   </div>
   <div class="chart-container">{charts['grades']}</div>
   <div class="explanation">
-    Each bar shows how many prerequisite links require that minimum grade, with the percentage of the total shown alongside. <strong>C- dominates overwhelmingly</strong> as the university-wide standard passing grade. The second most common is <strong>C (no minus)</strong>, followed by <strong>A-</strong> — used in competitive programs like honors tracks. The horizontal layout makes the extreme skew toward C- immediately clear while still showing the smaller grade categories.
+    Each bar shows how many prerequisite links require that minimum grade. <strong>C- dominates overwhelmingly</strong> as the university-wide standard passing grade. The second most common is <strong>C (no minus)</strong>, followed by <strong>A-</strong> &mdash; used in competitive programs.
   </div>
   <div class="chart-container">{charts['grade_strictness']}</div>
   <div class="explanation">
-    Each department's bar shows the <strong>percentage breakdown</strong> of grade levels required for its prerequisites, making departments directly comparable regardless of size. Departments on the left have the highest proportion of strict requirements (A or B range). Green (C-) dominates for most departments, confirming the university-wide standard. Red and orange segments highlight departments with more demanding progression standards.
+    Each department's bar shows the <strong>percentage breakdown</strong> of grade levels required for its prerequisites. Departments on the left have the highest proportion of strict requirements (A or B range). Green (C-) dominates for most departments.
   </div>
 </section>
 
-<!-- 7. Catalog -->
+<!-- 11. Course Attributes -->
+<section id="attributes">
+  <div class="section-header">
+    <div class="section-num">11 &mdash; Course Attributes</div>
+    <h2>Gen-Ed Tags &amp; Classifications</h2>
+    <p>{total_unique_attrs} unique attributes tagging courses across the curriculum.</p>
+  </div>
+  <div class="chart-container">{charts['attributes_dist']}</div>
+  <div class="explanation">
+    Course attributes are tags that classify courses for general education requirements, major electives, and special designations. <strong>"Preparatory"</strong> and <strong>"MTH Major Elective"</strong> are the most common tags. Science requirements, communication courses, and social science requirements round out the top categories &mdash; reflecting AUS's broad general education structure.
+  </div>
+  <div class="chart-container">{charts['attributes_over_time']}</div>
+  <div class="explanation">
+    This stacked area chart shows how different categories of course attributes have evolved over time. Growth in "Communication/English" and "Natural Sciences" tags reflects expanding gen-ed requirements. The overall increase in tagged sections mirrors the university's growth in total offerings.
+  </div>
+</section>
+
+<!-- 12. Catalog -->
 <section id="catalog">
   <div class="section-header">
-    <div class="section-num">07 — Course Catalog</div>
+    <div class="section-num">12 &mdash; Course Catalog</div>
     <h2>Credits, Lectures, and Labs</h2>
     <p>{table_counts['catalog']:,} unique courses in the catalog.</p>
   </div>
@@ -1376,50 +2073,56 @@ footer p {{ margin-top: 0.3rem; }}
     <div class="chart-container">{charts['lab_lecture']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses, which is standard for most universities. A smaller number carry 1, 2, 4, or 6 credits — labs, independent studies, and capstone projects often differ from the 3-credit standard. <strong>Right:</strong> Blue bars show average lecture hours and red bars show average lab hours side by side for each department, making it easy to compare the teaching balance. Engineering and science departments have significantly more lab hours than humanities departments.
+    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses. Labs, independent studies, and capstones often differ from the 3-credit standard. <strong>Right:</strong> Blue bars show lecture hours and red bars show lab hours by department. Engineering and science departments have significantly more lab hours.
   </div>
   <div class="chart-container">{charts['lecture_lab']}</div>
   <div class="explanation">
-    This shows the <strong>ratio of lab to lecture sections over time</strong>. The stacked bars show absolute counts, while the green line shows the percentage of sections that are labs. The lab percentage has remained fairly stable at around 15-20%, meaning AUS consistently allocates about one lab section for every five lecture sections.
+    The stacked bars show absolute counts of lab vs lecture sections, while the green line shows the percentage of labs. The lab percentage has remained fairly stable at around 15-20%.
   </div>
 </section>
 
-<!-- 8. Enrollment -->
+<!-- 13. Enrollment -->
 <section id="enrollment">
   <div class="section-header">
-    <div class="section-num">08 — Enrollment</div>
+    <div class="section-num">13 &mdash; Enrollment</div>
     <h2>How Full Are Classes?</h2>
-    <p>Tracking seat availability across 20 years of data.</p>
+    <p>Tracking seat availability and enrollment restrictions across 20 years.</p>
   </div>
   <div class="chart-container">{charts['enrollment']}</div>
   <div class="explanation">
-    Each bar represents a semester, split into sections that had <strong>available seats (green)</strong> and sections that were <strong>completely full (red)</strong>. Note that this data reflects a single snapshot in time (when the database was scraped), not the entire registration period. Early semesters may appear more "full" because enrollment data was captured later in the term, while future semesters may appear more "available" because registration is still ongoing.
+    Each bar represents a semester, split into sections with <strong>available seats (green)</strong> and sections <strong>completely full (red)</strong>. Note that this reflects a snapshot when scraped, not the full registration period.
   </div>
   <div class="chart-container">{charts['fill_rate']}</div>
   <div class="explanation">
-    This ranks subjects by what percentage of their sections were full. <strong>Higher bars mean more sections at capacity.</strong> Subjects with high fill rates are in high demand and may benefit from additional sections. Note that small subjects with few sections can appear disproportionately full due to small sample sizes.
+    Subjects ranked by what percentage of their sections were full. <strong>Higher bars mean more sections at capacity</strong> and potentially high demand.
   </div>
-  {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and type. The boxes show the spread of fee amounts — the line in the middle is the median, and the box covers the 25th to 75th percentile. Different colleges (CAS for Arts & Sciences, CAAD for Architecture, Art and Design) charge different technology fee tiers, with CAAD typically charging more due to specialized software and equipment needs.</div>' if "fees" in charts else ""}
-  {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">This tracks how the average fee amount has changed over the semesters. Fee increases over time reflect general cost inflation and evolving technology requirements across different colleges.</div>' if "fee_trend" in charts else ""}
+  {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and type. The boxes show the spread of fee amounts. Different colleges charge different technology fee tiers.</div>' if "fees" in charts else ""}
+  {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">Fee trends over time reflect general cost inflation and evolving technology requirements across different colleges.</div>' if "fee_trend" in charts else ""}
+  <div class="chart-container">{charts['restriction_types']}</div>
+  <div class="explanation">
+    <strong>{restricted_pct}% of sections have enrollment restrictions.</strong> The vast majority are level-based restrictions (e.g., "Undergraduate Only" or "Graduate Only"), ensuring students are in appropriate courses for their academic level. A smaller portion restrict by major, college, or class standing.
+  </div>
 </section>
 
-<!-- 9. Browse Data -->
+<!-- 14. Browse Data -->
 <section id="browse">
   <div class="section-header">
-    <div class="section-num">09 — Browse Data</div>
+    <div class="section-num">14 &mdash; Browse &amp; Explore</div>
     <h2>Explore the Dataset</h2>
-    <p>Search, filter, and sort through the raw data. Showing the most recent 5,000 sections and the full course catalog. Click any column header to sort.</p>
+    <p>Search courses, look up instructors, and explore prerequisite chains interactively.</p>
   </div>
 
   <div class="tabs">
     <div class="tab active" onclick="switchTab('courses')">Recent Courses</div>
     <div class="tab" onclick="switchTab('catalog')">Course Catalog</div>
+    <div class="tab" onclick="switchTab('dep-explorer')">Dependency Explorer</div>
+    <div class="tab" onclick="switchTab('inst-explorer')">Instructor Lookup</div>
   </div>
 
   <div id="tab-courses" class="tab-content active">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="course-search" placeholder="Search courses — try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
+        <input type="text" id="course-search" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
         <select id="course-semester" onchange="filterTable('courses')">
           <option value="">All Semesters</option>
         </select>
@@ -1448,7 +2151,7 @@ footer p {{ margin-top: 0.3rem; }}
   <div id="tab-catalog" class="tab-content">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="catalog-search" placeholder="Search catalog — try a subject, keyword, or department..." oninput="filterTable('catalog')">
+        <input type="text" id="catalog-search" placeholder="Search catalog &mdash; try a subject, keyword, or department..." oninput="filterTable('catalog')">
       </div>
       <div class="table-scroll">
         <table id="catalog-table">
@@ -1469,6 +2172,30 @@ footer p {{ margin-top: 0.3rem; }}
       <div class="table-info" id="catalog-info"></div>
     </div>
   </div>
+
+  <div id="tab-dep-explorer" class="tab-content">
+    <div class="table-wrapper">
+      <div class="table-controls">
+        <input type="text" id="dep-search" placeholder="Type a course code (e.g., COE 221, MTH 104, PHY 101)..." oninput="searchDeps(this.value)" autocomplete="off">
+      </div>
+      <div id="dep-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 200px; overflow-y: auto;"></div>
+      <div id="dep-result" style="padding: 1.5rem;">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Search for any course to see its complete dependency tree: prerequisites (with minimum grades), corequisites, and which courses need it as a prerequisite.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-inst-explorer" class="tab-content">
+    <div class="table-wrapper">
+      <div class="table-controls">
+        <input type="text" id="inst-search" placeholder="Type an instructor name..." oninput="searchInst(this.value)" autocomplete="off">
+      </div>
+      <div id="inst-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 200px; overflow-y: auto;"></div>
+      <div id="inst-result" style="padding: 1.5rem;">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Search for any instructor to see their complete teaching history: courses taught, subjects, tenure, and career timeline at AUS.</p>
+      </div>
+    </div>
+  </div>
 </section>
 
 </div>
@@ -1477,18 +2204,19 @@ footer p {{ margin-top: 0.3rem; }}
 <footer>
   <p>
     Built with data from <a href="https://github.com/DeadPackets/AUSCrawl">AUSCrawl</a>
-    — {table_counts['courses']:,} sections across {table_counts['semesters']} semesters
+    &mdash; {table_counts['courses']:,} sections, {len(charts)} interactive charts, {table_counts['semesters']} semesters
   </p>
   <p>
     <a href="https://github.com/DeadPackets/VisualizeAUS">GitHub</a>
     &nbsp;&middot;&nbsp; Data scraped from AUS Banner &nbsp;&middot;&nbsp; MIT License
   </p>
 </footer>
-
 <script>
-// ---- Course data ----
+// ---- Data ----
 const courseData = {browse_json};
 const catalogData = {catalog_json};
+const depData = {dep_explorer_json};
+const instData = {inst_explorer_json};
 
 // Populate semester dropdown
 const semesters = [...new Set(courseData.map(r => r.term_name))];
@@ -1572,6 +2300,130 @@ function switchTab(tab) {{
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   event.target.classList.add('active');
   document.getElementById('tab-' + tab).classList.add('active');
+}}
+
+// ---- Dependency Explorer ----
+function searchDeps(query) {{
+  const q = query.toUpperCase().trim();
+  const sugBox = document.getElementById('dep-suggestions');
+  if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
+  const matches = Object.keys(depData).filter(k => k.includes(q)).sort().slice(0, 12);
+  if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
+  sugBox.style.display = 'block';
+  sugBox.innerHTML = matches.map(m =>
+    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-family: var(--font-mono); font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
+          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+          onclick="showDeps('${{m}}')">${{m}}</div>`).join('');
+}}
+
+function showDeps(course) {{
+  document.getElementById('dep-suggestions').style.display = 'none';
+  document.getElementById('dep-search').value = course;
+  const data = depData[course];
+  const result = document.getElementById('dep-result');
+  if (!data) {{ result.innerHTML = '<p style="color: var(--text-muted);">Course not found in dependency graph.</p>'; return; }}
+
+  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 1rem; color: var(--accent);">${{course}}</h3>`;
+
+  // Prerequisites
+  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Prerequisites (' + data.p.length + ')</h4>';
+  if (data.p.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">None</p>'; }}
+  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + data.p.map(p =>
+    `<span style="background: var(--accent-bg); border: 1px solid #f0dbd8; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{p.c}}')">${{p.c}}${{p.g ? ' (min: ' + p.g + ')' : ''}}</span>`
+  ).join('') + '</div>'; }}
+  html += '</div>';
+
+  // Corequisites
+  const coreqs = data.q || [];
+  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Corequisites (' + coreqs.length + ')</h4>';
+  if (coreqs.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">None</p>'; }}
+  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + coreqs.map(c =>
+    `<span style="background: #f3e8f9; border: 1px solid #d5b8e8; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`
+  ).join('') + '</div>'; }}
+  html += '</div>';
+
+  // Needed by
+  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Is Prerequisite For (' + data.n.length + ')</h4>';
+  if (data.n.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">No courses depend on this</p>'; }}
+  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + data.n.map(c =>
+    `<span style="background: #e8f5e9; border: 1px solid #a5d6a7; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`
+  ).join('') + '</div>'; }}
+  html += '</div>';
+
+  // Full prerequisite chain (recursive)
+  function getChain(c, visited) {{
+    if (!depData[c] || visited.has(c)) return [c];
+    visited.add(c);
+    if (depData[c].p.length === 0) return [c];
+    const longest = depData[c].p.reduce((best, p) => {{
+      const chain = getChain(p.c, visited);
+      return chain.length > best.length ? chain : best;
+    }}, []);
+    return [...longest, c];
+  }}
+  const chain = getChain(course, new Set());
+  if (chain.length > 1) {{
+    html += '<div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.75rem;">Longest Prerequisite Chain (' + chain.length + ' courses)</h4>';
+    html += '<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem;">';
+    chain.forEach((c, i) => {{
+      if (i > 0) html += '<span style="color: var(--accent); font-weight: 700;">&rarr;</span>';
+      const isCurrent = c === course;
+      html += `<span style="background: ${{isCurrent ? 'var(--accent)' : 'var(--bg-warm)'}}; color: ${{isCurrent ? '#fff' : 'var(--text)'}}; padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.8rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`;
+    }});
+    html += '</div></div>';
+  }}
+
+  result.innerHTML = html;
+}}
+
+// ---- Instructor Explorer ----
+function searchInst(query) {{
+  const q = query.toLowerCase().trim();
+  const sugBox = document.getElementById('inst-suggestions');
+  if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
+  const matches = Object.keys(instData).filter(k => k.toLowerCase().includes(q)).sort().slice(0, 12);
+  if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
+  sugBox.style.display = 'block';
+  sugBox.innerHTML = matches.map(m =>
+    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
+          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+          onclick="showInst('${{m.replace(/'/g, "\\\\'")}}')"><strong>${{m}}</strong></div>`).join('');
+}}
+
+function showInst(name) {{
+  document.getElementById('inst-suggestions').style.display = 'none';
+  document.getElementById('inst-search').value = name;
+  const data = instData[name];
+  const result = document.getElementById('inst-result');
+  if (!data) {{ result.innerHTML = '<p style="color: var(--text-muted);">Instructor not found.</p>'; return; }}
+
+  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 0.5rem; color: var(--accent);">${{name}}</h3>`;
+
+  // Stats row
+  html += '<div style="display: flex; gap: 2rem; margin-bottom: 1.5rem; flex-wrap: wrap;">';
+  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.t}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Sections</span></div>`;
+  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.n}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Semesters</span></div>`;
+  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.s.length}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Subjects</span></div>`;
+  html += '</div>';
+
+  // Tenure
+  html += `<p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;"><strong>Active:</strong> ${{data.f}} &mdash; ${{data.l}}</p>`;
+
+  // Subjects
+  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Subjects Taught</h4>';
+  html += '<div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">' + data.s.map(s =>
+    `<span style="background: var(--bg-warm); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem;">${{s}}</span>`
+  ).join('') + '</div></div>';
+
+  // Top courses
+  html += '<div><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Top Courses (by times taught)</h4>';
+  html += '<table style="width: 100%; font-size: 0.85rem;"><thead><tr><th style="text-align: left; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Course</th><th style="text-align: left; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Title</th><th style="text-align: right; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Times</th></tr></thead><tbody>';
+  data.c.forEach(c => {{
+    html += `<tr><td style="padding: 0.4rem; font-family: var(--font-mono); font-size: 0.82rem;">${{c[0]}} ${{c[1]}}</td><td style="padding: 0.4rem; color: var(--text-secondary);">${{c[2]}}</td><td style="padding: 0.4rem; text-align: right; font-family: var(--font-mono); font-weight: 600;">${{c[3]}}</td></tr>`;
+  }});
+  html += '</tbody></table></div>';
+
+  result.innerHTML = html;
 }}
 
 // Initial render
