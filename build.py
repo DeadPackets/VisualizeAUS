@@ -36,7 +36,7 @@ AUS_GOLD = "#C4972F"
 def chart_html(fig, chart_id):
     """Return a Plotly figure as an embeddable HTML div."""
     return pio.to_html(fig, full_html=False, include_plotlyjs=False,
-                       div_id=chart_id, config={"responsive": True})
+                       div_id=f"chart-{chart_id}", config={"responsive": True})
 
 
 def parse_time_minutes(t):
@@ -848,22 +848,22 @@ section + section {{
 
 .section-header .section-num {{
   font-family: var(--font-mono);
-  font-size: 0.72rem;
+  font-size: 0.85rem;
   font-weight: 500;
   color: var(--accent);
   letter-spacing: 0.15em;
   text-transform: uppercase;
-  margin-bottom: 0.6rem;
+  margin-bottom: 0.75rem;
 }}
 
 .section-header h2 {{
   font-family: var(--font-display);
-  font-size: 2rem;
+  font-size: clamp(2rem, 4vw, 2.75rem);
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
   margin-bottom: 0.75rem;
-  line-height: 1.25;
+  line-height: 1.2;
 }}
 
 .section-header p {{
