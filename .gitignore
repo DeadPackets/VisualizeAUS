@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*_executed.ipynb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database (downloaded from AUSCrawl at build time)
+*.db
+
+# Build output (deployed via GitHub Actions)
+_site/
