@@ -98,14 +98,16 @@ df_growth["semester_type"] = df_growth["term_name"].apply(classify_semester)
 df_regular = df_growth[df_growth["semester_type"].isin(["Fall", "Spring"])].copy()
 
 fig = go.Figure()
-color_map = {"Fall": "#e74c3c", "Spring": "#3498db", "Summer": "#2ecc71",
-             "Summer II": "#27ae60", "Wintermester": "#9b59b6"}
-for sem_type in ["Fall", "Spring", "Summer", "Summer II", "Wintermester"]:
-    mask = df_growth["semester_type"] == sem_type
+color_map = {"Fall": "#c0392b", "Spring": "#2471a3", "Summer": "#27ae60",
+             "Summer II": "#27ae60", "Summer III": "#27ae60", "Wintermester": "#8e44ad"}
+# Sort chronologically by term_id so x-axis is in order
+df_growth_sorted = df_growth.sort_values("term_id")
+for sem_type in ["Fall", "Spring", "Summer", "Summer II", "Summer III", "Wintermester"]:
+    mask = df_growth_sorted["semester_type"] == sem_type
     if not mask.any():
         continue
     fig.add_trace(go.Scatter(
-        x=df_growth.loc[mask, "term_name"], y=df_growth.loc[mask, "total_sections"],
+        x=df_growth_sorted.loc[mask, "term_name"], y=df_growth_sorted.loc[mask, "total_sections"],
         mode="markers", name=sem_type,
         marker=dict(color=color_map.get(sem_type, "#95a5a6"), size=8),
         hovertemplate="%{x}<br>%{y} sections<extra></extra>"))
@@ -117,7 +119,8 @@ fig.add_trace(go.Scatter(
     line=dict(color="rgba(0,0,0,0.3)", dash="dash", width=2)))
 fig.update_layout(template=TEMPLATE, title="Course Sections Per Semester (2005-2026)",
                   xaxis_title="Semester", yaxis_title="Number of Sections", height=500,
-                  xaxis=dict(tickangle=-45, dtick=4),
+                  xaxis=dict(tickangle=-45, categoryorder="array",
+                             categoryarray=df_growth_sorted["term_name"].tolist(), dtick=4),
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 charts["growth"] = chart_html(fig, "growth")
 
@@ -182,14 +185,17 @@ df_subj_time = pd.read_sql_query("""
     WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
     GROUP BY c.subject, s.term_id ORDER BY s.term_id
 """, conn)
-top15_subjects = df_subjects.head(15)["subject"].tolist()
-df_top15 = df_subj_time[df_subj_time["subject"].isin(top15_subjects)].copy()
-fig = px.line(df_top15, x="term_name", y="sections", color="subject",
-              title="Top 15 Subjects: Section Count Over Time",
+top10_subjects = df_subjects.head(10)["subject"].tolist()
+df_top10 = df_subj_time[df_subj_time["subject"].isin(top10_subjects)].copy()
+distinct_colors = ["#c0392b", "#2471a3", "#27ae60", "#8e44ad", "#d68910",
+                   "#1abc9c", "#e74c3c", "#2c3e50", "#e67e22", "#16a085"]
+fig = px.line(df_top10, x="term_name", y="sections", color="subject",
+              title="Top 10 Subjects: Section Count Over Time",
               labels={"sections": "Sections", "term_name": "Semester"},
-              color_discrete_sequence=px.colors.qualitative.Set3)
+              color_discrete_sequence=distinct_colors)
+fig.update_traces(line=dict(width=2.5))
 fig.update_layout(template=TEMPLATE, height=550, xaxis=dict(tickangle=-45, dtick=4),
-                  legend=dict(title="Subject"))
+                  legend=dict(title="Subject", font=dict(size=12)))
 charts["subject_lines"] = chart_html(fig, "subject_lines")
 
 # ===== 3. Instructors =====
@@ -203,12 +209,13 @@ df_instructors = pd.read_sql_query("""
 """, conn)
 top30_inst = df_instructors.head(30)
 fig = px.bar(top30_inst.iloc[::-1], x="total_sections", y="instructor_name", orientation="h",
-             color="semesters_active", color_continuous_scale="Blues",
+             color="semesters_active", color_continuous_scale=["#d4e6f1", "#1a5276"],
              hover_data=["subjects_taught", "semesters_active"],
              title="Top 30 Instructors by Total Sections Taught",
              labels={"total_sections": "Total Sections", "instructor_name": "",
                      "semesters_active": "Semesters Active"})
-fig.update_layout(template=TEMPLATE, height=700)
+fig.update_layout(template=TEMPLATE, height=700,
+                  coloraxis_colorbar=dict(title="Semesters<br>Active", thickness=15, len=0.5))
 charts["instructors"] = chart_html(fig, "instructors")
 
 # ===== 3b. Instructor tenure =====
@@ -271,7 +278,8 @@ df_pivot["time_mins"] = df_pivot.index.map(parse_time_minutes)
 df_pivot = df_pivot.sort_values("time_mins").drop("time_mins", axis=1)
 df_pivot = df_pivot[[d for d in day_order if d in df_pivot.columns]]
 fig = px.imshow(df_pivot.values, x=df_pivot.columns.tolist(), y=df_pivot.index.tolist(),
-                color_continuous_scale="YlOrRd",
+                color_continuous_scale=[[0, "#ffffff"], [0.15, "#fde8e4"], [0.4, "#e88373"],
+                                        [0.7, "#c0392b"], [1.0, "#7b241c"]],
                 title="Schedule Heatmap: When Are AUS Courses Held?",
                 labels={"x": "Day", "y": "Start Time", "color": "Sections"}, aspect="auto")
 fig.update_layout(template=TEMPLATE, height=600)
@@ -416,13 +424,24 @@ df_grades = pd.read_sql_query("""
 grade_order = ["A", "A-", "B+", "B", "B-", "C+", "C", "C-", "D+", "D", "D-", "P"]
 df_grades["grade_rank"] = df_grades["minimum_grade"].map({g: i for i, g in enumerate(grade_order)})
 df_grades = df_grades.sort_values("grade_rank")
-fig = px.bar(df_grades, x="minimum_grade", y="count",
-             title="Minimum Grade Requirements Across All Prerequisites",
-             labels={"minimum_grade": "Minimum Grade", "count": "Dependencies"},
-             color="count", color_continuous_scale="RdYlGn_r", text="count")
-fig.update_traces(textposition="outside")
-fig.update_layout(template=TEMPLATE, height=400)
-fig.update_coloraxes(showscale=False)
+total_deps = df_grades["count"].sum()
+df_grades["pct"] = (df_grades["count"] / total_deps * 100).round(1)
+# Color grades by severity
+grade_colors = {"A": "#922b21", "A-": "#c0392b", "B+": "#d35400", "B": "#e67e22",
+                "B-": "#f39c12", "C+": "#2e86c1", "C": "#2471a3", "C-": "#1a5276",
+                "D+": "#7f8c8d", "D": "#95a5a6", "D-": "#bdc3c7", "P": "#27ae60"}
+colors = [grade_colors.get(g, "#95a5a6") for g in df_grades["minimum_grade"]]
+fig = go.Figure(go.Bar(
+    y=df_grades["minimum_grade"], x=df_grades["count"], orientation="h",
+    text=[f"{row['count']:,} ({row['pct']}%)" for _, row in df_grades.iterrows()],
+    textposition="outside", marker_color=colors,
+    hovertemplate="%{y}: %{x:,} dependencies<extra></extra>"))
+fig.update_layout(template=TEMPLATE, height=500,
+                  title="Minimum Grade Requirements Across All Prerequisites",
+                  xaxis_title="Number of Dependencies", yaxis_title="",
+                  yaxis=dict(categoryorder="array",
+                             categoryarray=list(reversed(grade_order))),
+                  margin=dict(r=160))
 charts["grades"] = chart_html(fig, "grades")
 
 # ===== 6b. Grade strictness by dept =====
@@ -440,12 +459,17 @@ df_strict = pd.read_sql_query("""
     GROUP BY c.subject HAVING total >= 50
     ORDER BY 1.0 * (grade_A + grade_B) / total DESC
 """, conn)
+# Convert to percentages for meaningful comparison
+for col in ["grade_A", "grade_B", "grade_C", "grade_C_minus", "grade_D"]:
+    df_strict[f"{col}_pct"] = (df_strict[col] / df_strict["total"] * 100).round(1)
 fig = go.Figure()
-for col, color, label in [("grade_A", "#e74c3c", "A/A-"), ("grade_B", "#f39c12", "B range"),
-    ("grade_C", "#3498db", "C/C+"), ("grade_C_minus", "#2ecc71", "C-"), ("grade_D", "#95a5a6", "D range")]:
-    fig.add_trace(go.Bar(x=df_strict["subject"], y=df_strict[col], name=label, marker_color=color))
-fig.update_layout(template=TEMPLATE, title="Grade Requirement Strictness by Department",
-                  barmode="stack", height=500, xaxis_title="Subject", yaxis_title="Dependencies",
+for col, color, label in [("grade_A_pct", "#c0392b", "A/A-"), ("grade_B_pct", "#e67e22", "B range"),
+    ("grade_C_pct", "#2471a3", "C/C+"), ("grade_C_minus_pct", "#27ae60", "C-"), ("grade_D_pct", "#95a5a6", "D range")]:
+    fig.add_trace(go.Bar(x=df_strict["subject"], y=df_strict[col], name=label, marker_color=color,
+                         hovertemplate="%{x}: %{y:.1f}%<extra>" + label + "</extra>"))
+fig.update_layout(template=TEMPLATE, title="Grade Requirement Distribution by Department (%)",
+                  barmode="stack", height=500, xaxis_title="Department", yaxis_title="% of Prerequisites",
+                  yaxis=dict(range=[0, 100]),
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 charts["grade_strictness"] = chart_html(fig, "grade_strictness")
 
@@ -466,15 +490,18 @@ charts["credit_hours"] = chart_html(fig, "credit_hours")
 df_dept_hours = df_catalog.groupby("department").agg(
     {"lecture_hours": "mean", "lab_hours": "mean", "credit_hours": ["mean", "count"]}).reset_index()
 df_dept_hours.columns = ["department", "avg_lecture", "avg_lab", "avg_credits", "course_count"]
-df_dept_hours = df_dept_hours[df_dept_hours["course_count"] >= 10].sort_values("avg_lab", ascending=False)
+df_dept_hours = df_dept_hours[df_dept_hours["course_count"] >= 10].sort_values("avg_lecture", ascending=True)
 df_dept_hours["dept_short"] = df_dept_hours["department"].str.replace(" Department", "").str.replace(" (n.a.)", "", regex=False)
 fig = go.Figure()
 fig.add_trace(go.Bar(y=df_dept_hours["dept_short"], x=df_dept_hours["avg_lecture"],
-    name="Lecture Hours", orientation="h", marker_color="#3498db"))
+    name="Avg Lecture Hrs", orientation="h", marker_color="#2471a3",
+    text=df_dept_hours["avg_lecture"].round(1), textposition="outside"))
 fig.add_trace(go.Bar(y=df_dept_hours["dept_short"], x=df_dept_hours["avg_lab"],
-    name="Lab Hours", orientation="h", marker_color="#e74c3c"))
+    name="Avg Lab Hrs", orientation="h", marker_color="#c0392b",
+    text=df_dept_hours["avg_lab"].round(1), textposition="outside"))
 fig.update_layout(template=TEMPLATE, title="Average Lecture vs Lab Hours by Department",
-                  barmode="stack", height=600, xaxis_title="Hours",
+                  barmode="group", height=600, xaxis_title="Hours",
+                  margin=dict(r=80),
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 charts["lecture_lab"] = chart_html(fig, "lecture_lab")
 
@@ -535,20 +562,39 @@ for _, row in df_fees_raw.iterrows():
         pass
 df_fees = pd.DataFrame(fee_records) if fee_records else pd.DataFrame()
 if len(df_fees) > 0:
-    fig = px.box(df_fees, x="fee_type", y="amount",
-                 title="Fee Amount Distribution by Type",
-                 labels={"amount": "Amount (AED)", "fee_type": "Fee Type"}, color="fee_type")
-    fig.update_layout(template=TEMPLATE, height=450, showlegend=False)
+    # Shorten long fee type names for readability
+    df_fees["fee_short"] = df_fees["fee_type"].str.replace("Technology Fee - ", "Tech Fee: ")
+    fee_colors = ["#c0392b", "#2471a3", "#27ae60", "#8e44ad", "#d68910",
+                  "#1abc9c", "#e74c3c", "#2c3e50"]
+    # Focus on the most common fee types and filter extreme outliers (tuition etc.)
+    top_fee_types = df_fees["fee_short"].value_counts().head(10).index.tolist()
+    df_fees_top = df_fees[df_fees["fee_short"].isin(top_fee_types) & (df_fees["amount"] < 5000)]
+    fig = px.box(df_fees_top, y="fee_short", x="amount", orientation="h",
+                 title="Fee Amount Distribution (Top 10 Fee Types, under 5,000 AED)",
+                 labels={"amount": "Amount (AED)", "fee_short": ""},
+                 color="fee_short", color_discrete_sequence=fee_colors)
+    fig.update_layout(template=TEMPLATE, height=450, showlegend=False,
+                      margin=dict(l=200))
     charts["fees"] = chart_html(fig, "fees")
 
-    df_fee_trend = df_fees.groupby(["term_id", "term_name", "fee_type"]).agg(
+    # For fee trend, use consistent colors per fee type (no mid-line color change)
+    df_fee_trend = df_fees.groupby(["term_id", "term_name", "fee_short"]).agg(
         avg_amount=("amount", "mean"), count=("amount", "count")).reset_index().sort_values("term_id")
-    top_fees = df_fees["fee_type"].value_counts().head(5).index.tolist()
-    df_fee_trend_top = df_fee_trend[df_fee_trend["fee_type"].isin(top_fees)]
-    fig = px.line(df_fee_trend_top, x="term_name", y="avg_amount", color="fee_type",
-                  title="Average Fee Amount Over Time",
-                  labels={"avg_amount": "Amount (AED)", "term_name": "Semester"}, markers=True)
-    fig.update_layout(template=TEMPLATE, height=450, xaxis=dict(tickangle=-45, dtick=4))
+    top_fees = df_fees["fee_short"].value_counts().head(5).index.tolist()
+    df_fee_trend_top = df_fee_trend[df_fee_trend["fee_short"].isin(top_fees)]
+    fig = go.Figure()
+    for i, fee_type in enumerate(top_fees):
+        df_ft = df_fee_trend_top[df_fee_trend_top["fee_short"] == fee_type].sort_values("term_id")
+        fig.add_trace(go.Scatter(
+            x=df_ft["term_name"], y=df_ft["avg_amount"],
+            mode="lines+markers", name=fee_type,
+            line=dict(color=fee_colors[i % len(fee_colors)], width=2),
+            marker=dict(size=5)))
+    fig.update_layout(template=TEMPLATE, height=450,
+                      title="Average Fee Amount Over Time",
+                      xaxis_title="Semester", yaxis_title="Amount (AED)",
+                      xaxis=dict(tickangle=-45, dtick=4),
+                      legend=dict(font=dict(size=10)))
     charts["fee_trend"] = chart_html(fig, "fee_trend")
 
 # ===== 10. Cross-dept dependencies =====
@@ -599,12 +645,17 @@ fig.update_yaxes(title_text="Sections", secondary_y=False)
 fig.update_yaxes(title_text="Lab %", secondary_y=True)
 charts["lab_lecture"] = chart_html(fig, "lab_lecture")
 
-# Longest prereq chains
+# Longest prereq chains — use DAG version to avoid cycle issues
 longest_chains = []
 try:
+    # Break cycles by working on a DAG copy
+    dag = G.copy()
+    while not nx.is_directed_acyclic_graph(dag):
+        cycle = nx.find_cycle(dag)
+        dag.remove_edge(*cycle[0][:2])
     longest = {}
-    for node in nx.topological_sort(G):
-        preds = list(G.predecessors(node))
+    for node in nx.topological_sort(dag):
+        preds = list(dag.predecessors(node))
         if not preds:
             longest[node] = [node]
         else:
@@ -612,7 +663,7 @@ try:
             longest[node] = best + [node]
     sorted_paths = sorted(longest.items(), key=lambda x: len(x[1]), reverse=True)
     longest_chains = sorted_paths[:12]
-except nx.NetworkXUnfeasible:
+except Exception:
     pass
 
 conn.close()
@@ -1026,20 +1077,58 @@ tbody td {{
   font-weight: 700;
 }}
 
+.chains-grid {{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}}
+
 .chain {{
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 0.85rem 1.25rem;
-  margin: 0.5rem 0;
-  font-family: var(--font-mono);
-  font-size: 0.78rem;
-  overflow-x: auto;
-  white-space: nowrap;
+  padding: 1rem 1.25rem;
 }}
 
-.chain-steps {{ color: var(--accent); margin-right: 0.75rem; font-weight: 600; }}
-.chain-arrow {{ color: var(--text-light); margin: 0 0.2rem; }}
+.chain-header {{
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.75rem;
+}}
+
+.chain-step {{
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.3rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--text);
+}}
+
+.chain-step-num {{
+  min-width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 50%;
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}}
+
+.chain-connector {{
+  width: 1px;
+  height: 0.4rem;
+  background: var(--border);
+  margin-left: 0.65rem;
+}}
 
 /* ===================== TABS ===================== */
 .tabs {{
@@ -1174,7 +1263,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['subject_lines']}</div>
   <div class="explanation">
-    This shows how the top 15 subjects have evolved semester by semester. Most subjects show steady or growing offerings. Some interesting patterns: <strong>Writing (WRI)</strong> courses saw a significant increase around 2010, likely reflecting curriculum changes. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion.
+    This shows how the <strong>top 10 subjects</strong> have evolved semester by semester. Most subjects show steady or growing offerings. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion. Some subjects show notable inflection points around 2010-2012, likely reflecting curriculum changes.
   </div>
   <div class="chart-container">{charts['subject_heatmap']}</div>
   <div class="explanation">
@@ -1239,8 +1328,10 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
 
   <h3 class="chains-title">Longest Prerequisite Chains</h3>
-  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">These are the longest sequences where each course requires the previous one. A chain of {len(longest_chains[0][1]) if longest_chains else 'N/A'} means a student must pass {len(longest_chains[0][1]) - 1 if longest_chains else 'N/A'} prerequisite courses before reaching the final one.</p>
-  {''.join('<div class="chain"><span class="chain-steps">[' + str(len(path)) + ']</span> ' + '<span class=chain-arrow> &rarr; </span>'.join(path) + '</div>' for _, path in longest_chains)}
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">These are the longest sequences where each course requires the previous one. A chain of {len(longest_chains[0][1]) if longest_chains else 'N/A'} courses means a student must pass {len(longest_chains[0][1]) - 1 if longest_chains else 'N/A'} prerequisite courses before reaching the final one.</p>
+  <div class="chains-grid">
+  {''.join('<div class="chain"><div class="chain-header">' + str(len(path)) + ' courses &middot; ' + path[-1] + '</div>' + ''.join('<div class="chain-connector"></div><div class="chain-step"><span class="chain-step-num">' + str(i+1) + '</span>' + c + '</div>' for i, c in enumerate(path)) + '</div>' for _, path in longest_chains[:6])}
+  </div>
 
   <div class="chart-container" style="margin-top: 2rem">{charts['coe_network']}</div>
   <div class="explanation">
@@ -1265,11 +1356,11 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['grades']}</div>
   <div class="explanation">
-    The overwhelming majority of prerequisites at AUS require a minimum grade of <strong>C-</strong>, which is the standard passing grade for moving forward. However, some courses require higher grades: <strong>C (no minus)</strong> is the second most common, followed by <strong>A-</strong>, which appears in certain competitive programs. A small number of prerequisites require a B or higher — these are typically for advanced courses where strong foundational knowledge is critical.
+    Each bar shows how many prerequisite links require that minimum grade, with the percentage of the total shown alongside. <strong>C- dominates overwhelmingly</strong> as the university-wide standard passing grade. The second most common is <strong>C (no minus)</strong>, followed by <strong>A-</strong> — used in competitive programs like honors tracks. The horizontal layout makes the extreme skew toward C- immediately clear while still showing the smaller grade categories.
   </div>
   <div class="chart-container">{charts['grade_strictness']}</div>
   <div class="explanation">
-    Each bar is broken down by the grade levels required for that department's prerequisites. Departments shown at the left of the chart have <strong>the highest proportion of strict grade requirements</strong> (A or B range). The green (C-) portion dominates for most departments, confirming that C- is the university-wide standard. Red and orange segments (A/A- and B range) highlight departments with more demanding progression standards.
+    Each department's bar shows the <strong>percentage breakdown</strong> of grade levels required for its prerequisites, making departments directly comparable regardless of size. Departments on the left have the highest proportion of strict requirements (A or B range). Green (C-) dominates for most departments, confirming the university-wide standard. Red and orange segments highlight departments with more demanding progression standards.
   </div>
 </section>
 
@@ -1285,7 +1376,7 @@ footer p {{ margin-top: 0.3rem; }}
     <div class="chart-container">{charts['lab_lecture']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses, which is standard for most universities. A smaller number carry 1, 2, 4, or 6 credits — labs, independent studies, and capstone projects often differ from the 3-credit standard. <strong>Right:</strong> This breaks down lecture versus lab hours by department. Engineering and science departments have significantly more lab hours than humanities departments, reflecting their hands-on curriculum requirements.
+    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses, which is standard for most universities. A smaller number carry 1, 2, 4, or 6 credits — labs, independent studies, and capstone projects often differ from the 3-credit standard. <strong>Right:</strong> Blue bars show average lecture hours and red bars show average lab hours side by side for each department, making it easy to compare the teaching balance. Engineering and science departments have significantly more lab hours than humanities departments.
   </div>
   <div class="chart-container">{charts['lecture_lab']}</div>
   <div class="explanation">
