@@ -1974,16 +1974,81 @@ footer a:hover {{ text-decoration: underline; }}
 footer p {{ margin-top: 0.3rem; }}
 
 /* ===================== RESPONSIVE ===================== */
+
+/* Plotly charts must not blow out their container */
+.chart-container .plotly-graph-div,
+.chart-container .js-plotly-plot {{
+  max-width: 100%;
+  overflow-x: auto;
+}}
+
+/* Tables always scrollable horizontally */
+.table-scroll {{
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}}
+
 @media (max-width: 768px) {{
-  .chart-row {{ grid-template-columns: 1fr; }}
-  .stats-row {{ flex-wrap: wrap; }}
-  .stat {{ padding: 1rem 0.75rem; }}
-  .stat-value {{ font-size: 1.3rem; }}
-  .hero h1 {{ font-size: 2.25rem; }}
-  section {{ padding: 3rem 0; }}
-  .section-header h2 {{ font-size: 1.6rem; }}
-  nav a {{ padding: 0.75rem 0.6rem; font-size: 0.75rem; }}
-  .container {{ padding: 0 1rem; }}
+  /* Layout */
+  .container {{ padding: 0 0.75rem; }}
+  section {{ padding: 2.5rem 0; }}
+
+  /* Hero */
+  .hero {{ padding: 3.5rem 1rem 3rem; }}
+  .hero .subtitle {{ font-size: 0.95rem; margin-bottom: 2rem; }}
+  .stats-row {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    max-width: 100%;
+    border-radius: var(--radius-sm);
+  }}
+  .stat {{ padding: 0.75rem 0.5rem; }}
+  .stat + .stat {{ border-left: 1px solid rgba(255,255,255,0.08); }}
+  /* Third row item wraps to second row */
+  .stat:nth-child(4) {{ border-top: 1px solid rgba(255,255,255,0.08); }}
+  .stat:nth-child(5) {{ border-top: 1px solid rgba(255,255,255,0.08); }}
+  .stat-value {{ font-size: 1.1rem; }}
+  .stat-label {{ font-size: 0.6rem; letter-spacing: 0.08em; }}
+
+  /* Nav */
+  nav .nav-inner {{ padding: 0 0.5rem; }}
+  nav .nav-brand {{ font-size: 0.82rem; padding-right: 0.75rem; margin-right: 0.25rem; }}
+  nav a {{ padding: 0.7rem 0.5rem; font-size: 0.72rem; }}
+
+  /* Section headers */
+  .section-header {{ margin-bottom: 1.5rem; }}
+  .section-header .section-num {{ font-size: 0.72rem; }}
+
+  /* Charts */
+  .chart-row {{ grid-template-columns: 1fr; gap: 1rem; }}
+  .chart-container {{ padding: 0.5rem; margin-bottom: 1rem; }}
+  .chart-container .plotly-graph-div {{ min-width: 0 !important; }}
+
+  /* Explanations */
+  .explanation {{ padding: 0.75rem 1rem; font-size: 0.85rem; margin: -0.25rem 0 1.5rem; }}
+
+  /* Tables */
+  .table-controls {{ padding: 0.75rem; gap: 0.5rem; }}
+  .table-controls input {{ min-width: 0; flex: 1; font-size: 0.8rem; padding: 0.5rem 0.7rem; }}
+  .table-controls select {{ font-size: 0.8rem; padding: 0.5rem 0.7rem; }}
+  thead th {{ padding: 0.5rem 0.6rem; font-size: 0.6rem; }}
+  tbody td {{ padding: 0.45rem 0.6rem; font-size: 0.78rem; max-width: 180px; }}
+  .table-info {{ padding: 0.5rem 0.75rem; font-size: 0.7rem; }}
+
+  /* Tabs */
+  .tabs {{ overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }}
+  .tabs::-webkit-scrollbar {{ display: none; }}
+  .tab {{ padding: 0.6rem 1rem; font-size: 0.8rem; white-space: nowrap; flex-shrink: 0; }}
+
+  /* Prerequisite chains */
+  .chains-grid {{ grid-template-columns: 1fr; }}
+  .chains-title {{ font-size: 1.05rem; margin-top: 1.5rem; }}
+
+  /* Footer */
+  footer {{ padding: 2rem 1rem; font-size: 0.8rem; }}
+
+  /* Insight boxes */
+  .insight {{ padding: 1rem; font-size: 0.85rem; }}
 }}
 
 </style>
