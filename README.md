@@ -43,7 +43,7 @@ An interactive data visualization dashboard exploring every course offered at th
 
 ## View the Site
 
-Visit the live site at: **https://deadpackets.github.io/VisualizeAUS**
+Visit the live site at: **http://projects.deadpackets.pw/VisualizeAUS/**
 
 Or build locally:
 
