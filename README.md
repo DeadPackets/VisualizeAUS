@@ -8,7 +8,7 @@
     <img src="https://img.shields.io/badge/semesters-98-C4972F?style=flat-square" alt="98 semesters">
     <img src="https://img.shields.io/badge/instructors-1%2C649-C4972F?style=flat-square" alt="1,649 instructors">
     <img src="https://img.shields.io/badge/prerequisites-152%2C968-C4972F?style=flat-square" alt="152,968 prerequisites">
-    <img src="https://img.shields.io/badge/charts-45-C4972F?style=flat-square" alt="45 charts">
+    <img src="https://img.shields.io/badge/charts-51-C4972F?style=flat-square" alt="51 charts">
     <br/>
     <img src="https://img.shields.io/badge/python-3.12+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python">
     <img src="https://img.shields.io/badge/Plotly-interactive-3F4F75?style=flat-square&logo=plotly&logoColor=white" alt="Plotly">
@@ -18,7 +18,7 @@
 
 ---
 
-An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. Built with Plotly for 45 fully interactive charts, searchable data tables, interactive course dependency explorer, instructor career lookup, and a prerequisite network of 152,968 links.
+An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. Built with Plotly for 51 fully interactive charts, searchable data tables, interactive course dependency explorer, instructor career lookup, and a prerequisite network of 152,968 links.
 
 **Data source:** [AUSCrawl](https://github.com/DeadPackets/AUSCrawl)
 
@@ -26,17 +26,17 @@ An interactive data visualization dashboard exploring every course offered at th
 
 ## What's Inside
 
-45 interactive visualizations across 14 sections:
+51 interactive visualizations across 14 sections:
 
 | Section | What You'll Find |
 |---------|-----------------|
 | **University Growth** | Course sections per semester with trend analysis, unique courses vs total sections |
 | **Subject Analysis** | Top 25 subjects, subject evolution over time, heatmap across 20 years |
 | **Academic Levels** | Undergraduate/Graduate/Doctorate distribution over time, level mix by subject |
-| **Instructor Analysis** | Top 30 instructors, tenure distribution, teaching diversity scatter, workload trends |
+| **Instructor Analysis** | Top 30 instructors, tenure distribution, teaching diversity scatter, workload trends, recruitment & departures, retention curves by cohort, course ownership analysis |
 | **Teaching Modality** | Traditional vs non-traditional instruction, modality by subject |
-| **COVID-19 Impact** | Pandemic disruption analysis: section counts, modality shift, lab impact, subject-level changes |
-| **Schedule Patterns** | Day-time heatmap, day pattern popularity, building utilization |
+| **COVID-19 Impact** | Data-driven pandemic analysis: section resilience, course variety contraction, subject heatmap, unassigned classroom trend |
+| **Schedule Patterns** | Day-time heatmap, day pattern popularity, building utilization, Saturday class disappearance, day pattern evolution over time |
 | **Curriculum Evolution** | New courses per year, course longevity, most consistent courses, discontinued courses |
 | **Prerequisite Network** | Most connected courses, longest chains, COE network graph, corequisite analysis |
 | **Grade Requirements** | Minimum grade distribution, department strictness comparison |

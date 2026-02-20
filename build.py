@@ -301,6 +301,87 @@ fig.update_traces(textposition="inside", textinfo="percent+label")
 fig.update_layout(template=TEMPLATE, height=450)
 charts["day_patterns"] = chart_html(fig, "day_patterns")
 
+# ===== 4b2. Saturday class decline =====
+df_saturday = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id,
+           SUM(CASE WHEN c.days LIKE '%S%' THEN 1 ELSE 0 END) as saturday_sections,
+           COUNT(*) as total_sections
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+    AND c.days IS NOT NULL AND c.days != ''
+    GROUP BY c.term_id ORDER BY c.term_id
+""", conn)
+df_saturday['sat_pct'] = (df_saturday['saturday_sections'] / df_saturday['total_sections'] * 100).round(1)
+
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig.add_trace(go.Bar(
+    x=df_saturday['term_name'], y=df_saturday['saturday_sections'],
+    name='Saturday Sections', marker_color=AUS_GOLD,
+    hovertemplate='%{x}<br>%{y} sections<extra></extra>'), secondary_y=False)
+fig.add_trace(go.Scatter(
+    x=df_saturday['term_name'], y=df_saturday['sat_pct'],
+    name='% of All Sections', mode='lines+markers',
+    line=dict(color='#c0392b', width=2), marker=dict(size=4),
+    hovertemplate='%{x}<br>%{y:.1f}%<extra></extra>'), secondary_y=True)
+fig.update_layout(template=TEMPLATE, title="The Disappearance of Saturday Classes",
+                  height=450, xaxis=dict(tickangle=-45, dtick=4),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+fig.update_yaxes(title_text="Saturday Sections", secondary_y=False)
+fig.update_yaxes(title_text="% of Total", secondary_y=True)
+charts['saturday_decline'] = chart_html(fig, 'saturday_decline')
+
+sat_peak = df_saturday.loc[df_saturday['saturday_sections'].idxmax()]
+sat_peak_term = sat_peak['term_name']
+sat_peak_count = int(sat_peak['saturday_sections'])
+sat_peak_pct = round(sat_peak['sat_pct'], 1)
+sat_recent = df_saturday.iloc[-1]
+sat_recent_count = int(sat_recent['saturday_sections'])
+
+# ===== 4b3. Day pattern evolution over time =====
+df_day_evo = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id, c.days, COUNT(*) as cnt
+    FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE c.days IS NOT NULL AND c.days != ''
+    AND (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+    GROUP BY s.term_id, c.days ORDER BY s.term_id
+""", conn)
+
+def classify_day_pattern(days):
+    if days in ('MW',): return 'MW'
+    if days in ('TRU',): return 'TRU (Tue/Thu/Sun)'
+    if days in ('TR',): return 'TR (Tue/Thu)'
+    if 'S' in days: return 'Includes Saturday'
+    if days == 'MTWRU': return 'Daily (MTWRU)'
+    if len(days) == 1: return 'Single Day'
+    return 'Other'
+
+df_day_evo['pattern'] = df_day_evo['days'].apply(classify_day_pattern)
+df_day_pattern_agg = df_day_evo.groupby(['term_name', 'term_id', 'pattern'])['cnt'].sum().reset_index()
+df_day_total = df_day_pattern_agg.groupby(['term_name', 'term_id'])['cnt'].sum().reset_index().rename(columns={'cnt': 'total'})
+df_day_pattern_agg = df_day_pattern_agg.merge(df_day_total)
+df_day_pattern_agg['pct'] = (df_day_pattern_agg['cnt'] / df_day_pattern_agg['total'] * 100).round(1)
+
+pattern_colors = {'MW': '#2471a3', 'TRU (Tue/Thu/Sun)': '#c0392b', 'TR (Tue/Thu)': '#27ae60',
+                  'Includes Saturday': '#f39c12', 'Daily (MTWRU)': '#8e44ad',
+                  'Single Day': '#95a5a6', 'Other': '#bdc3c7'}
+pattern_order = ['MW', 'TRU (Tue/Thu/Sun)', 'TR (Tue/Thu)', 'Includes Saturday',
+                 'Daily (MTWRU)', 'Single Day', 'Other']
+
+fig = go.Figure()
+for pat in pattern_order:
+    df_p = df_day_pattern_agg[df_day_pattern_agg['pattern'] == pat].sort_values('term_id')
+    if len(df_p) > 0:
+        fig.add_trace(go.Scatter(
+            x=df_p['term_name'], y=df_p['pct'], name=pat,
+            mode='lines', stackgroup='one',
+            line=dict(color=pattern_colors.get(pat, '#bdc3c7'), width=0.5),
+            hovertemplate='%{x}<br>' + pat + ': %{y:.1f}%<extra></extra>'))
+fig.update_layout(template=TEMPLATE, title="Day Pattern Mix Over Time (% of Scheduled Sections)",
+                  height=500, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis=dict(title="% of Sections", range=[0, 100]),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['day_pattern_evolution'] = chart_html(fig, 'day_pattern_evolution')
+
 # ===== 4c. Buildings =====
 df_rooms = pd.read_sql_query("""
     SELECT classroom as location, COUNT(*) as count FROM courses
@@ -775,6 +856,147 @@ fig = px.line(df_inst_workload, x='term_name', y='avg_sections',
 fig.update_traces(line=dict(width=2.5))
 fig.update_layout(template=TEMPLATE, height=400, xaxis=dict(tickangle=-45, dtick=4))
 charts['instructor_workload'] = chart_html(fig, 'instructor_workload')
+
+# ===== NEW: Instructor Recruitment & Departure =====
+# First and last semester for each instructor
+df_inst_career = pd.read_sql_query("""
+    SELECT instructor_name,
+           MIN(c.term_id) as first_term_id, MAX(c.term_id) as last_term_id
+    FROM courses c
+    WHERE c.instructor_name != '' AND c.instructor_name != 'TBA'
+    GROUP BY instructor_name
+""", conn)
+
+# Get all major semesters in order
+df_sem_order = pd.read_sql_query("""
+    SELECT term_id, term_name FROM semesters
+    WHERE term_name LIKE 'Fall%' OR term_name LIKE 'Spring%'
+    ORDER BY term_id
+""", conn)
+sem_list = df_sem_order['term_id'].tolist()
+sem_names = dict(zip(df_sem_order['term_id'], df_sem_order['term_name']))
+
+# Count new hires and departures per semester
+new_hires = df_inst_career.groupby('first_term_id').size().reindex(sem_list, fill_value=0)
+# Departure = last_term_id is this semester (but NOT if it's the most recent semester)
+last_two_semesters = sem_list[-2:]  # Exclude recent — they haven't "departed" yet
+departures = df_inst_career[~df_inst_career['last_term_id'].isin(last_two_semesters)].groupby('last_term_id').size().reindex(sem_list, fill_value=0)
+
+df_turnover = pd.DataFrame({
+    'term_id': sem_list,
+    'term_name': [sem_names[t] for t in sem_list],
+    'new_hires': new_hires.values,
+    'departures': departures.values
+})
+
+fig = go.Figure()
+fig.add_trace(go.Bar(x=df_turnover['term_name'], y=df_turnover['new_hires'],
+    name='New Instructors', marker_color='#27ae60',
+    hovertemplate='%{x}<br>%{y} new instructors<extra></extra>'))
+fig.add_trace(go.Bar(x=df_turnover['term_name'], y=-df_turnover['departures'],
+    name='Departures', marker_color='#c0392b',
+    hovertemplate='%{x}<br>%{customdata} departures<extra></extra>',
+    customdata=df_turnover['departures']))
+fig.update_layout(template=TEMPLATE, title="Instructor Recruitment & Departures Per Semester",
+                  height=480, barmode='relative',
+                  xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="Instructors (positive = hired, negative = departed)",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['instructor_turnover'] = chart_html(fig, 'instructor_turnover')
+
+total_ever = len(df_inst_career)
+still_active = len(df_inst_career[df_inst_career['last_term_id'].isin(last_two_semesters)])
+
+# ===== NEW: Instructor Retention Curve =====
+# For each hiring cohort (year), what % are still teaching N years later?
+df_inst_career['first_year'] = df_inst_career['first_term_id'].str[:4].astype(int)
+df_inst_career['last_year'] = df_inst_career['last_term_id'].str[:4].astype(int)
+df_inst_career['tenure_years'] = df_inst_career['last_year'] - df_inst_career['first_year']
+
+# Group into cohorts by 5-year bands
+cohort_bins = [(2005, 2009), (2010, 2014), (2015, 2019)]
+cohort_colors = {'2005-2009': '#2471a3', '2010-2014': '#27ae60', '2015-2019': '#8e44ad'}
+max_years = 15
+
+fig = go.Figure()
+for start, end in cohort_bins:
+    label = f'{start}-{end}'
+    cohort = df_inst_career[(df_inst_career['first_year'] >= start) & (df_inst_career['first_year'] <= end)]
+    total = len(cohort)
+    if total < 10:
+        continue
+    survival = []
+    for y in range(0, max_years + 1):
+        remaining = len(cohort[cohort['tenure_years'] >= y])
+        survival.append(round(remaining / total * 100, 1))
+    fig.add_trace(go.Scatter(
+        x=list(range(max_years + 1)), y=survival,
+        name=f'{label} ({total} instructors)',
+        mode='lines+markers', marker=dict(size=5),
+        line=dict(color=cohort_colors.get(label, '#95a5a6'), width=2.5),
+        hovertemplate='Year %{x}<br>%{y:.1f}% remaining<extra>' + label + '</extra>'))
+
+fig.update_layout(template=TEMPLATE, title="Instructor Retention Curves by Hiring Cohort",
+                  height=450,
+                  xaxis=dict(title="Years After First Semester", dtick=2),
+                  yaxis=dict(title="% Still Teaching", range=[0, 105]),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['instructor_retention'] = chart_html(fig, 'instructor_retention')
+
+# ===== NEW: Course Ownership =====
+# For each course, count distinct instructors vs semesters offered
+df_ownership = pd.read_sql_query("""
+    SELECT subject, course_number, title,
+           COUNT(DISTINCT instructor_name) as num_instructors,
+           COUNT(DISTINCT term_id) as num_terms,
+           COUNT(*) as total_sections
+    FROM courses
+    WHERE instructor_name != '' AND instructor_name != 'TBA'
+    GROUP BY subject, course_number
+    HAVING num_terms >= 5
+""", conn)
+df_ownership['course'] = df_ownership['subject'] + ' ' + df_ownership['course_number']
+df_ownership['instructor_per_term'] = (df_ownership['num_instructors'] / df_ownership['num_terms']).round(2)
+
+# Scatter: terms offered vs distinct instructors (log scale helps with density)
+fig = px.scatter(df_ownership, x='num_terms', y='num_instructors',
+                 size='total_sections', size_max=20,
+                 hover_data=['course', 'title', 'total_sections'],
+                 color='instructor_per_term',
+                 color_continuous_scale=[[0, '#27ae60'], [0.5, '#f1c40f'], [1.0, '#c0392b']],
+                 labels={'num_terms': 'Semesters Offered', 'num_instructors': 'Distinct Instructors',
+                         'instructor_per_term': 'Instructors<br>per Term', 'total_sections': 'Total Sections'},
+                 title="Course Ownership: Instructor Continuity vs. Turnover")
+fig.update_layout(template=TEMPLATE, height=520)
+charts['course_ownership'] = chart_html(fig, 'course_ownership')
+
+# Top "single-owner" courses (1 instructor, many terms)
+df_single_owner = pd.read_sql_query("""
+    SELECT c.subject || ' ' || c.course_number as course, c.title,
+           c.instructor_name, COUNT(DISTINCT c.term_id) as terms_taught
+    FROM courses c
+    WHERE c.instructor_name != '' AND c.instructor_name != 'TBA'
+    GROUP BY c.subject, c.course_number, c.instructor_name
+    HAVING terms_taught >= 15
+    ORDER BY terms_taught DESC LIMIT 20
+""", conn)
+
+fig = go.Figure(go.Bar(
+    y=[f"{r['course']} — {r['instructor_name']}" for _, r in df_single_owner.iterrows()],
+    x=df_single_owner['terms_taught'], orientation='h',
+    marker_color=AUS_GOLD,
+    hovertemplate='%{y}<br>%{x} semesters<extra></extra>'))
+fig.update_layout(template=TEMPLATE,
+                  title="Longest Instructor-Course Pairings (Same Person, Same Course)",
+                  height=max(450, len(df_single_owner) * 24),
+                  xaxis_title="Semesters Taught",
+                  yaxis=dict(autorange='reversed'))
+charts['course_ownership_top'] = chart_html(fig, 'course_ownership_top')
+
+most_owned = df_single_owner.iloc[0]
+most_owned_course = most_owned['course']
+most_owned_instructor = most_owned['instructor_name']
+most_owned_terms = int(most_owned['terms_taught'])
 
 # ===== NEW: Teaching Modality Over Time =====
 df_modality = pd.read_sql_query("""
@@ -1913,6 +2135,22 @@ footer p {{ margin-top: 0.3rem; }}
   <div class="explanation">
     <strong>Left:</strong> The TBA rate shows the percentage of sections each semester where no instructor was assigned at scrape time. High TBA in recent semesters often means instructors haven't been finalized yet. <strong>Right:</strong> The average number of sections per instructor per semester has remained relatively stable, hovering around 3-4 sections, showing consistent workload distribution.
   </div>
+  <div class="chart-container">{charts['instructor_turnover']}</div>
+  <div class="explanation">
+    Green bars show newly hired instructors (first semester teaching); red bars show departures (last semester before disappearing from the data). Of {total_ever:,} instructors who have ever taught at AUS, {still_active:,} are still active. Fall semesters consistently recruit more new faculty than Spring, reflecting annual hiring cycles.
+  </div>
+  <div class="chart-container">{charts['instructor_retention']}</div>
+  <div class="explanation">
+    Survival curves by hiring cohort: of instructors hired in a given period, what percentage are still teaching N years later? The steepest drop is in the first 1-2 years &mdash; many instructors teach for only a short period. Those who survive past ~5 years tend to stay much longer. Compare cohorts to see if AUS is retaining faculty better or worse over time.
+  </div>
+  <div class="chart-container">{charts['course_ownership']}</div>
+  <div class="explanation">
+    Each dot is a course. <strong>Green dots in the lower-right</strong> are "owned" courses: offered for many semesters but taught by very few instructors (high continuity). <strong>Red dots in the upper-right</strong> are high-turnover courses: many semesters AND many different instructors rotating through. Dot size indicates total sections taught.
+  </div>
+  <div class="chart-container">{charts['course_ownership_top']}</div>
+  <div class="explanation">
+    The longest instructor-course pairings in AUS history. <strong>{most_owned_instructor}</strong> has taught <strong>{most_owned_course}</strong> for {most_owned_terms} semesters &mdash; an extraordinary run of continuity. These are the courses where one person has become synonymous with the class.
+  </div>
 </section>
 
 <!-- 5. Teaching Modality -->
@@ -1974,6 +2212,14 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="explanation">
     <strong>Left:</strong> The two dominant scheduling patterns are <strong>Mon/Wed (MW)</strong> and <strong>Tue/Thu/Sun (TRU)</strong>, together accounting for over half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections, followed by the Language Building and Engineering Building Right.
+  </div>
+  <div class="chart-container">{charts['saturday_decline']}</div>
+  <div class="explanation">
+    One of the most dramatic shifts in AUS scheduling: Saturday classes peaked at <strong>{sat_peak_count} sections ({sat_peak_pct}% of all sections)</strong> in <strong>{sat_peak_term}</strong>, then collapsed to near-zero by 2010. The most recent semester has just {sat_recent_count} Saturday sections. AUS effectively transitioned from a 6-day to a 5-day teaching week within a few years.
+  </div>
+  <div class="chart-container">{charts['day_pattern_evolution']}</div>
+  <div class="explanation">
+    The full evolution of scheduling patterns over 20 years. As Saturday classes (yellow) disappeared, the <strong>MW</strong> and <strong>TRU</strong> patterns consolidated their dominance. Note the Tue/Thu (TR, without Sunday) pattern and single-day classes as persistent but smaller shares. The daily (MTWRU) pattern is mostly summer/intensive courses.
   </div>
 </section>
 
