@@ -841,129 +841,145 @@ total_nontrad = df_modality[df_modality['mode'] != 'Traditional']['sections'].su
 total_modality = df_modality['sections'].sum()
 nontrad_overall_pct = round(total_nontrad / total_modality * 100, 1) if total_modality > 0 else 0
 
-# ===== NEW: COVID-19 Impact =====
-# Define COVID semesters
-covid_terms = ['Spring 2020', 'Fall 2020', 'Spring 2021']
-
-# Section counts: pre-COVID, COVID, post-COVID
-df_covid_sections = pd.read_sql_query("""
+# ===== COVID-19 Impact (data-driven) =====
+# Query all major semesters with multiple metrics
+df_covid = pd.read_sql_query("""
     SELECT s.term_name, s.term_id, COUNT(*) as sections,
            COUNT(DISTINCT c.subject || c.course_number) as unique_courses,
-           COUNT(DISTINCT c.instructor_name) as instructors
+           COUNT(DISTINCT c.instructor_name) as instructors,
+           SUM(CASE WHEN c.classroom IS NULL OR c.classroom = '' OR c.classroom = 'TBA' THEN 1 ELSE 0 END) as no_classroom,
+           ROUND(100.0 * SUM(CASE WHEN c.classroom IS NULL OR c.classroom = '' OR c.classroom = 'TBA' THEN 1 ELSE 0 END) / COUNT(*), 1) as pct_no_classroom
     FROM courses c JOIN semesters s ON c.term_id = s.term_id
     WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
     GROUP BY c.term_id ORDER BY c.term_id
 """, conn)
 
-def covid_era(name):
-    if name in covid_terms: return 'COVID'
-    # Pre-COVID: before Spring 2020
-    for y in range(2005, 2020):
-        if str(y) in name: return 'Pre-COVID'
-    if 'Fall 2019' in name: return 'Pre-COVID'
-    return 'Post-COVID'
+# --- Chart 1: Sections timeline with COVID band ---
+# Simple line chart with shaded COVID region — no colored era bars
+covid_start_idx = df_covid[df_covid['term_name'] == 'Spring 2020'].index
+covid_end_idx = df_covid[df_covid['term_name'] == 'Spring 2021'].index
 
-df_covid_sections['era'] = df_covid_sections['term_name'].apply(covid_era)
-
-# Bar chart of sections per semester, colored by COVID era
-era_colors = {'Pre-COVID': '#2471a3', 'COVID': '#c0392b', 'Post-COVID': '#27ae60'}
 fig = go.Figure()
-for era in ['Pre-COVID', 'COVID', 'Post-COVID']:
-    df_e = df_covid_sections[df_covid_sections['era'] == era]
-    fig.add_trace(go.Bar(x=df_e['term_name'], y=df_e['sections'], name=era,
-        marker_color=era_colors[era]))
-fig.update_layout(template=TEMPLATE, title="Course Sections Per Semester: COVID Impact",
-                  height=500, xaxis=dict(tickangle=-45, dtick=4), yaxis_title="Sections",
+fig.add_trace(go.Scatter(
+    x=df_covid['term_name'], y=df_covid['sections'],
+    mode='lines+markers', name='Total Sections',
+    line=dict(color='#2471a3', width=2.5), marker=dict(size=5)))
+fig.add_trace(go.Scatter(
+    x=df_covid['term_name'], y=df_covid['unique_courses'],
+    mode='lines+markers', name='Unique Courses',
+    line=dict(color='#c0392b', width=2, dash='dash'), marker=dict(size=4)))
+# Add COVID shading
+if len(covid_start_idx) > 0 and len(covid_end_idx) > 0:
+    fig.add_vrect(x0='Spring 2020', x1='Spring 2021',
+                  fillcolor='rgba(192,57,43,0.12)', line_width=0,
+                  annotation_text='COVID', annotation_position='top left',
+                  annotation=dict(font_size=11, font_color='#c0392b'))
+fig.update_layout(template=TEMPLATE,
+                  title="Course Sections & Unique Courses Per Semester",
+                  height=500, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="Count",
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 charts['covid_sections'] = chart_html(fig, 'covid_sections')
 
-# COVID vs pre-COVID stats
-pre_covid_avg = df_covid_sections[df_covid_sections['era'] == 'Pre-COVID']['sections'].tail(6).mean()
-covid_avg = df_covid_sections[df_covid_sections['era'] == 'COVID']['sections'].mean()
-post_covid_avg = df_covid_sections[df_covid_sections['era'] == 'Post-COVID']['sections'].head(6).mean()
-covid_drop_pct = round((1 - covid_avg / pre_covid_avg) * 100, 1) if pre_covid_avg > 0 else 0
-covid_recovery_pct = round((post_covid_avg / pre_covid_avg - 1) * 100, 1) if pre_covid_avg > 0 else 0
+# Compute stats for narrative
+f19_sections = int(df_covid[df_covid['term_name'] == 'Fall 2019']['sections'].iloc[0])
+f20_sections = int(df_covid[df_covid['term_name'] == 'Fall 2020']['sections'].iloc[0])
+latest_sections = int(df_covid['sections'].iloc[-1])
+latest_term = df_covid['term_name'].iloc[-1]
+covid_section_change = round((f20_sections / f19_sections - 1) * 100, 1)
+growth_since = round((latest_sections / f19_sections - 1) * 100, 1)
+f19_courses = int(df_covid[df_covid['term_name'] == 'Fall 2019']['unique_courses'].iloc[0])
+s21_courses = int(df_covid[df_covid['term_name'] == 'Spring 2021']['unique_courses'].iloc[0])
+course_variety_drop = round((s21_courses / f19_courses - 1) * 100, 1)
 
-# Modality during COVID: absolute numbers
-df_covid_mod = df_mod_agg.copy()
-df_covid_mod['era'] = df_covid_mod['term_name'].apply(covid_era)
-df_covid_mod_era = df_covid_mod.groupby(['era', 'mode'])['sections'].sum().reset_index()
-df_covid_mod_total = df_covid_mod_era.groupby('era')['sections'].sum().reset_index().rename(columns={'sections': 'total'})
-df_covid_mod_era = df_covid_mod_era.merge(df_covid_mod_total)
-df_covid_mod_era['pct'] = (df_covid_mod_era['sections'] / df_covid_mod_era['total'] * 100).round(1)
-
-era_order = ['Pre-COVID', 'COVID', 'Post-COVID']
-fig = go.Figure()
-for mode in ['Traditional', 'Non-Traditional', 'Blended', 'Online', 'Other']:
-    df_m = df_covid_mod_era[df_covid_mod_era['mode'] == mode]
-    df_m = df_m.set_index('era').reindex(era_order).reset_index()
-    if df_m['pct'].sum() > 0:
-        fig.add_trace(go.Bar(x=df_m['era'], y=df_m['pct'], name=mode,
-            marker_color=modality_colors.get(mode, '#95a5a6'),
-            text=df_m['pct'].apply(lambda x: f'{x:.1f}%' if pd.notna(x) else ''),
-            textposition='inside'))
-fig.update_layout(template=TEMPLATE, title="Teaching Modality: Pre-COVID vs COVID vs Post-COVID (%)",
-                  barmode='stack', height=450,
-                  yaxis_title="% of Sections", yaxis=dict(range=[0, 100]),
+# --- Chart 2: Instructors + Sections-per-course (variety contraction) ---
+df_covid['sections_per_course'] = (df_covid['sections'] / df_covid['unique_courses']).round(2)
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig.add_trace(go.Scatter(
+    x=df_covid['term_name'], y=df_covid['instructors'],
+    mode='lines+markers', name='Unique Instructors',
+    line=dict(color='#8e44ad', width=2.5), marker=dict(size=5)),
+    secondary_y=False)
+fig.add_trace(go.Scatter(
+    x=df_covid['term_name'], y=df_covid['unique_courses'],
+    mode='lines+markers', name='Unique Courses',
+    line=dict(color='#27ae60', width=2, dash='dash'), marker=dict(size=4)),
+    secondary_y=True)
+fig.add_vrect(x0='Spring 2020', x1='Spring 2021',
+              fillcolor='rgba(192,57,43,0.12)', line_width=0)
+fig.update_layout(template=TEMPLATE,
+                  title="Unique Instructors & Course Variety Over Time",
+                  height=480, xaxis=dict(tickangle=-45, dtick=4),
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-charts['covid_modality'] = chart_html(fig, 'covid_modality')
+fig.update_yaxes(title_text="Unique Instructors", secondary_y=False)
+fig.update_yaxes(title_text="Unique Courses", secondary_y=True)
+charts['covid_variety'] = chart_html(fig, 'covid_variety')
 
-# COVID modality stats
-covid_nontrad = df_covid_mod_era[(df_covid_mod_era['era'] == 'COVID') & (df_covid_mod_era['mode'] == 'Non-Traditional')]
-covid_nontrad_pct = round(covid_nontrad['pct'].iloc[0], 1) if len(covid_nontrad) > 0 else 0
-precovid_nontrad = df_covid_mod_era[(df_covid_mod_era['era'] == 'Pre-COVID') & (df_covid_mod_era['mode'] == 'Non-Traditional')]
-precovid_nontrad_pct = round(precovid_nontrad['pct'].iloc[0], 1) if len(precovid_nontrad) > 0 else 0
+f19_inst = int(df_covid[df_covid['term_name'] == 'Fall 2019']['instructors'].iloc[0])
+f20_inst = int(df_covid[df_covid['term_name'] == 'Fall 2020']['instructors'].iloc[0])
+inst_change = round((f20_inst / f19_inst - 1) * 100, 1)
 
-# Lab percentage during COVID
-df_covid_labs = pd.read_sql_query("""
-    SELECT s.term_name, s.term_id,
-           ROUND(100.0 * SUM(CASE WHEN c.is_lab = 1 THEN 1 ELSE 0 END) / COUNT(*), 1) as lab_pct,
-           SUM(CASE WHEN c.is_lab = 1 THEN 1 ELSE 0 END) as lab_count,
-           COUNT(*) as total
-    FROM courses c JOIN semesters s ON c.term_id = s.term_id
-    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
-    GROUP BY c.term_id ORDER BY c.term_id
-""", conn)
-df_covid_labs['era'] = df_covid_labs['term_name'].apply(covid_era)
-df_covid_labs['highlight'] = df_covid_labs['era'] == 'COVID'
-
-fig = go.Figure()
-fig.add_trace(go.Bar(
-    x=df_covid_labs[~df_covid_labs['highlight']]['term_name'],
-    y=df_covid_labs[~df_covid_labs['highlight']]['lab_pct'],
-    name='Normal', marker_color='#2471a3'))
-fig.add_trace(go.Bar(
-    x=df_covid_labs[df_covid_labs['highlight']]['term_name'],
-    y=df_covid_labs[df_covid_labs['highlight']]['lab_pct'],
-    name='COVID Era', marker_color='#c0392b'))
-fig.update_layout(template=TEMPLATE, title="Lab Section Percentage Over Time (COVID Highlighted)",
-                  height=400, xaxis=dict(tickangle=-45, dtick=4),
-                  yaxis_title="% Lab Sections",
-                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-charts['covid_labs'] = chart_html(fig, 'covid_labs')
-
-# Subject-level COVID impact: which subjects shrank most
-df_subject_covid = pd.read_sql_query("""
+# --- Chart 3: Subject-level heatmap Fall 2018 → Fall 2022, indexed to Fall 2019 = 100 ---
+compare_terms = ['Fall 2018', 'Fall 2019', 'Fall 2020', 'Fall 2021', 'Fall 2022']
+df_subj_covid = pd.read_sql_query(f"""
     SELECT c.subject, s.term_name, COUNT(*) as sections
     FROM courses c JOIN semesters s ON c.term_id = s.term_id
-    WHERE s.term_name IN ('Fall 2019', 'Fall 2020', 'Spring 2020', 'Spring 2021', 'Fall 2021')
+    WHERE s.term_name IN ({','.join('?' for _ in compare_terms)})
     GROUP BY c.subject, s.term_name
-""", conn)
-df_pre = df_subject_covid[df_subject_covid['term_name'] == 'Fall 2019'].set_index('subject')['sections']
-df_during = df_subject_covid[df_subject_covid['term_name'] == 'Fall 2020'].set_index('subject')['sections']
-df_change = pd.DataFrame({'pre': df_pre, 'during': df_during}).dropna()
-df_change['change_pct'] = ((df_change['during'] / df_change['pre'] - 1) * 100).round(1)
-df_change = df_change[df_change['pre'] >= 10]  # Only subjects with enough sections
-df_change = df_change.sort_values('change_pct')
+""", conn, params=compare_terms)
 
-fig = go.Figure(go.Bar(
-    y=df_change.index, x=df_change['change_pct'], orientation='h',
-    marker_color=[('#c0392b' if v < 0 else '#27ae60') for v in df_change['change_pct']],
-    text=[f"{v:+.1f}%" for v in df_change['change_pct']], textposition='outside'))
-fig.update_layout(template=TEMPLATE, title="Subject-Level Impact: Fall 2019 → Fall 2020 (% Change)",
-                  height=max(400, len(df_change) * 22), xaxis_title="% Change in Sections",
-                  margin=dict(r=80))
+pivot = df_subj_covid.pivot_table(index='subject', columns='term_name', values='sections', fill_value=0)
+pivot = pivot.reindex(columns=compare_terms)
+# Only subjects with ≥15 sections in Fall 2019
+pivot = pivot[pivot['Fall 2019'] >= 15]
+# Normalize to Fall 2019 = 100
+baseline = pivot['Fall 2019']
+pivot_norm = pivot.div(baseline, axis=0) * 100
+pivot_norm = pivot_norm.round(1)
+# Sort by Fall 2020 impact (biggest drop first)
+pivot_norm = pivot_norm.sort_values('Fall 2020', ascending=True)
+
+fig = go.Figure(go.Heatmap(
+    z=pivot_norm.values,
+    x=pivot_norm.columns.tolist(),
+    y=pivot_norm.index.tolist(),
+    colorscale=[[0, '#c0392b'], [0.5, '#fdfefe'], [1, '#27ae60']],
+    zmid=100, zmin=50, zmax=150,
+    text=pivot_norm.values.round(0).astype(int).astype(str),
+    texttemplate='%{text}',
+    textfont=dict(size=10),
+    colorbar=dict(title='Index<br>(F19=100)', tickvals=[50, 75, 100, 125, 150]),
+    hovertemplate='%{y} %{x}: %{z:.0f} (Fall 2019 = 100)<extra></extra>'))
+fig.update_layout(template=TEMPLATE,
+                  title="Subject Sections Indexed to Fall 2019 = 100",
+                  height=max(450, len(pivot_norm) * 24),
+                  xaxis=dict(side='top'), yaxis=dict(dtick=1))
 charts['covid_subjects'] = chart_html(fig, 'covid_subjects')
+
+# Count subjects that grew vs shrank
+f20_vals = pivot_norm['Fall 2020']
+subjects_shrank = int((f20_vals < 90).sum())
+subjects_grew = int((f20_vals > 110).sum())
+subjects_stable = int(len(f20_vals) - subjects_shrank - subjects_grew)
+
+# --- Chart 4: Unassigned classrooms — permanent structural shift ---
+fig = go.Figure()
+fig.add_trace(go.Bar(
+    x=df_covid['term_name'], y=df_covid['pct_no_classroom'],
+    marker_color=['#c0392b' if t in ('Spring 2020', 'Fall 2020', 'Spring 2021') else '#2471a3'
+                  for t in df_covid['term_name']],
+    hovertemplate='%{x}<br>%{y:.1f}% without classroom<extra></extra>'))
+fig.add_vrect(x0='Spring 2020', x1='Spring 2021',
+              fillcolor='rgba(192,57,43,0.12)', line_width=0)
+fig.update_layout(template=TEMPLATE,
+                  title="Sections Without Assigned Classroom (%)",
+                  height=420, xaxis=dict(tickangle=-45, dtick=4),
+                  yaxis_title="% of Sections",
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts['covid_classrooms'] = chart_html(fig, 'covid_classrooms')
+
+precovid_noroom = round(df_covid[df_covid['term_name'] == 'Fall 2019']['pct_no_classroom'].iloc[0], 1)
+latest_noroom = round(df_covid['pct_no_classroom'].iloc[-1], 1)
 
 # ===== NEW: Curriculum Evolution =====
 df_first_offered = pd.read_sql_query("""
@@ -1920,23 +1936,24 @@ footer p {{ margin-top: 0.3rem; }}
 <section id="covid">
   <div class="section-header">
     <div class="section-num">06 &mdash; COVID-19 Impact</div>
-    <h2>The Pandemic Disruption</h2>
-    <p>How did COVID-19 reshape teaching at AUS during Spring 2020 through Spring 2021?</p>
+    <h2>What the Data Actually Shows</h2>
+    <p>AUS continued operating through COVID (Spring 2020 &ndash; Spring 2021). The shaded region marks the pandemic semesters.</p>
   </div>
   <div class="chart-container">{charts['covid_sections']}</div>
   <div class="explanation">
-    This chart highlights the COVID era (red bars) against the pre-pandemic baseline (blue) and post-pandemic recovery (green). {'Section counts dropped by about ' + str(abs(covid_drop_pct)) + '% during COVID semesters compared to the pre-pandemic average.' if covid_drop_pct > 0 else 'Remarkably, section counts held relatively steady during COVID.'} Post-pandemic, AUS {'has exceeded pre-COVID levels' if covid_recovery_pct > 0 else 'is recovering toward pre-COVID levels'}.
+    Total sections barely dipped: Fall 2019 had {f19_sections} sections, Fall 2020 had {f20_sections} ({covid_section_change:+.1f}%). The real story is what came <em>after</em> &mdash; AUS surged to {latest_sections} sections by {latest_term} ({growth_since:+.1f}% vs Fall 2019). Course variety (red dashed line) dipped more noticeably, falling {abs(course_variety_drop):.1f}% by Spring 2021 as the university consolidated offerings while maintaining section counts.
   </div>
-  <div class="chart-container">{charts['covid_modality']}</div>
+  <div class="chart-container">{charts['covid_variety']}</div>
   <div class="explanation">
-    The most dramatic COVID impact was on <strong>teaching modality</strong>. Before COVID, non-traditional instruction was just {precovid_nontrad_pct}% of sections. During COVID, it surged to <strong>{covid_nontrad_pct}%</strong>. Post-COVID, AUS largely returned to traditional instruction, showing the university's preference for in-person education once safe to do so.
+    Instructor count fell from {f19_inst} (Fall 2019) to {f20_inst} (Fall 2020), a {abs(inst_change):.1f}% decline. Combined with fewer unique courses, this suggests AUS kept sections running by concentrating teaching among fewer instructors on a narrower set of courses &mdash; a resilience strategy, not a collapse.
   </div>
-  <div class="chart-row">
-    <div class="chart-container">{charts['covid_labs']}</div>
-    <div class="chart-container">{charts['covid_subjects']}</div>
-  </div>
+  <div class="chart-container">{charts['covid_subjects']}</div>
   <div class="explanation">
-    <strong>Left:</strong> Lab sections as a percentage of total sections. COVID semesters (red bars) may show changes in lab offerings as hands-on instruction was particularly challenging during lockdowns. <strong>Right:</strong> Subject-level impact comparing Fall 2019 to Fall 2020. Red bars indicate subjects that shrank, green bars show growth. Some subjects were more resilient to the disruption than others.
+    Each cell shows a subject's section count indexed to <strong>Fall 2019 = 100</strong>. Green cells above 100 mean growth; red below 100 means contraction. During Fall 2020, {subjects_shrank} subjects shrank by 10%+, {subjects_grew} grew by 10%+, and {subjects_stable} held steady. Language programs (ELP, ARA) and media (MCM) were hit hardest, while computing (CMP, COE) and sustainability (ESM) expanded &mdash; reflecting a shift toward technical subjects during the pandemic.
+  </div>
+  <div class="chart-container">{charts['covid_classrooms']}</div>
+  <div class="explanation">
+    The most lasting COVID effect: sections without an assigned physical classroom rose from {precovid_noroom}% (Fall 2019) to {latest_noroom}% ({latest_term}). This didn't spike during COVID itself, but climbed steadily afterward &mdash; suggesting a permanent structural shift toward flexible or unassigned scheduling that outlasted the pandemic.
   </div>
 </section>
 
