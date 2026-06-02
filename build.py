@@ -9,6 +9,7 @@ Usage: python build.py
 import sqlite3
 import json
 import os
+import re
 import shutil
 from collections import Counter
 from pathlib import Path
@@ -31,11 +32,30 @@ OUT_DIR = Path("_site")
 TEMPLATE = "plotly_white"
 AUS_GOLD = "#C4972F"
 
+# Canonical site location (https — Cloudflare serves a valid cert) and social
+# identity. Used for OpenGraph/Twitter tags, canonical links, and the
+# per-chart share pages. No trailing slash.
+SITE_URL = "https://projects.deadpackets.pw/VisualizeAUS"
+SITE_NAME = "VisualizeAUS"
+SITE_DESC = ("Twenty years of American University of Sharjah course data, "
+             "visualized: 75,000+ sections, every instructor, prerequisite, "
+             "and schedule from 2005 to 2026.")
+OG_IMAGE = f"{SITE_URL}/og-card.png"
+FONT_DIR = Path("assets/fonts")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 chart_specs = {}  # chart_id -> {data, layout}; embedded once for lazy rendering
+chart_meta = {}   # chart_id -> human title (for per-chart share cards)
+
+
+def _clean_title(raw, chart_id):
+    """A plain-text title for a chart: its figure title, else a prettified id."""
+    if raw:
+        return re.sub(r"<[^>]+>", "", str(raw)).strip()
+    return chart_id.replace("_", " ").title()
 
 
 def chart_html(fig, chart_id):
@@ -47,11 +67,156 @@ def chart_html(fig, chart_id):
     IntersectionObserver calls ``Plotly.newPlot`` only when the placeholder
     scrolls near the viewport. The placeholder reserves the chart's height so
     deferring the render causes no layout shift.
+
+    A "copy link" button is rendered alongside each chart; it copies that
+    chart's share URL (``/share/<id>/``), a stub page that carries chart-
+    specific OpenGraph tags and redirects humans to ``#chart-<id>``.
     """
     chart_specs[chart_id] = json.loads(pio.to_json(fig))
+    title = fig.layout.title.text if fig.layout.title else None
+    chart_meta[chart_id] = _clean_title(title, chart_id)
     height = fig.layout.height or 450
-    return (f'<div id="chart-{chart_id}" class="lazy-chart" data-cid="{chart_id}" '
-            f'style="min-height:{height}px;"></div>')
+    return (
+        f'<button class="chart-share" type="button" title="Copy link to this chart" '
+        f'aria-label="Copy a shareable link to this chart" onclick="copyShare(\'{chart_id}\')">'
+        f'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+        f'<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"></path>'
+        f'<path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"></path></svg></button>'
+        f'<div id="chart-{chart_id}" class="lazy-chart" data-cid="{chart_id}" '
+        f'style="min-height:{height}px;"></div>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Social / share asset generation (OG card, favicon, per-chart share pages)
+# ---------------------------------------------------------------------------
+
+def _font(family, size, weight=400):
+    """Load a brand variable font at a weight; fall back to PIL default."""
+    from PIL import ImageFont
+    try:
+        f = ImageFont.truetype(str(FONT_DIR / f"{family}.ttf"), size)
+        try:
+            f.set_variation_by_axes([weight])
+        except Exception:
+            pass
+        return f
+    except Exception:
+        return ImageFont.load_default()
+
+
+def make_og_card(out_dir, stats):
+    """Draw the 1200x630 social preview card with live headline stats."""
+    from PIL import Image, ImageDraw
+    W, H, pad = 1200, 630, 80
+    bg, ink, muted, gold = (250, 247, 242), (43, 38, 32), (122, 110, 96), (196, 151, 47)
+    img = Image.new("RGB", (W, H), bg)
+    d = ImageDraw.Draw(img)
+    d.rectangle([0, 0, W, 10], fill=gold)  # top accent
+    d.text((pad, 74), "AMERICAN UNIVERSITY OF SHARJAH", font=_font("Montserrat", 24, 600), fill=gold)
+    d.text((pad - 4, 124), "VisualizeAUS", font=_font("Raleway", 132, 800), fill=ink)
+    d.text((pad, 286), "Twenty years of course data, visualized", font=_font("Montserrat", 36, 400), fill=muted)
+    vfont, lfont = _font("Montserrat", 44, 700), _font("Montserrat", 20, 600)
+    colw = (W - 2 * pad) / len(stats)
+    for i, (val, lab) in enumerate(stats):
+        x = pad + i * colw
+        d.text((x, 432), val, font=vfont, fill=ink)
+        d.text((x, 496), lab.upper(), font=lfont, fill=muted)
+    d.text((pad, H - 66), "projects.deadpackets.pw/VisualizeAUS", font=_font("Montserrat", 24, 500), fill=gold)
+    img.save(out_dir / "og-card.png")
+
+
+def make_favicon(out_dir):
+    """Write an SVG favicon and a PNG apple-touch-icon (gold bar-chart mark)."""
+    (out_dir / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+        '<rect width="64" height="64" rx="14" fill="#C4972F"/>'
+        '<rect x="16" y="34" width="8" height="14" rx="2" fill="#fff"/>'
+        '<rect x="28" y="26" width="8" height="22" rx="2" fill="#fff"/>'
+        '<rect x="40" y="18" width="8" height="30" rx="2" fill="#fff"/></svg>'
+    )
+    try:
+        from PIL import Image, ImageDraw
+        img = Image.new("RGB", (180, 180), (196, 151, 47))
+        d = ImageDraw.Draw(img)
+        for x0, y0 in [(45, 96), (79, 73), (113, 51)]:
+            d.rounded_rectangle([x0, y0, x0 + 22, 135], radius=6, fill=(255, 255, 255))
+        img.save(out_dir / "apple-touch-icon.png")
+    except Exception as e:
+        print(f"  [favicon] apple-touch-icon skipped: {e}")
+
+
+def _chart_card(spec, title, out_path):
+    """Render a chart to a 1200x630 PNG with a branded footer band (no overlap)."""
+    import io as _io
+    from PIL import Image, ImageDraw
+    fig = go.Figure(spec)
+    fig.update_layout(
+        width=1200, height=552, template="plotly_white",
+        paper_bgcolor="white", plot_bgcolor="white",
+        margin=dict(l=60, r=44, t=70, b=70),
+        title=dict(text=title, x=0.02, xanchor="left",
+                   font=dict(family="Raleway, sans-serif", size=30, color="#2b2620")),
+    )
+    chart_im = Image.open(_io.BytesIO(pio.to_image(fig, format="png")))
+    canvas = Image.new("RGB", (1200, 630), "white")
+    canvas.paste(chart_im, (0, 0))
+    d = ImageDraw.Draw(canvas)
+    d.rectangle([0, 552, 1200, 556], fill=(196, 151, 47))  # gold divider
+    d.text((60, 578), "VisualizeAUS", font=_font("Raleway", 28, 800), fill=(43, 38, 32))
+    url = "projects.deadpackets.pw/VisualizeAUS"
+    uf = _font("Montserrat", 18, 500)
+    d.text((1140 - d.textlength(url, font=uf), 588), url, font=uf, fill=(122, 110, 96))
+    canvas.save(out_path)
+
+
+def write_share_pages(out_dir):
+    """Per-chart share stubs: chart-specific OG meta + a 1200x630 PNG + redirect."""
+    import html as _html
+    import warnings
+    warnings.filterwarnings("ignore", category=DeprecationWarning)  # quiet kaleido<1.0 notice
+    rendered = 0
+    for cid, spec in chart_specs.items():
+        cdir = out_dir / "share" / cid
+        cdir.mkdir(parents=True, exist_ok=True)
+        title = chart_meta.get(cid) or cid.replace("_", " ").title()
+        img_url = OG_IMAGE  # fall back to the site card if rendering fails
+        try:
+            _chart_card(spec, title, str(cdir / "card.png"))
+            img_url = f"{SITE_URL}/share/{cid}/card.png"
+            rendered += 1
+        except Exception as e:
+            print(f"  [share] {cid}: image skipped ({e})")
+        desc = f"{title} — from VisualizeAUS, 20 years of AUS course data."
+        target = f"{SITE_URL}/#chart-{cid}"
+        t_esc, d_esc, tgt_js = _html.escape(title), _html.escape(desc), json.dumps(target)
+        (cdir / "index.html").write_text(f"""<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{t_esc} · VisualizeAUS</title>
+<link rel="canonical" href="{SITE_URL}/">
+<meta name="description" content="{d_esc}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{SITE_NAME}">
+<meta property="og:title" content="{t_esc} · VisualizeAUS">
+<meta property="og:description" content="{d_esc}">
+<meta property="og:url" content="{SITE_URL}/share/{cid}/">
+<meta property="og:image" content="{img_url}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{t_esc}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{t_esc} · VisualizeAUS">
+<meta name="twitter:description" content="{d_esc}">
+<meta name="twitter:image" content="{img_url}">
+<meta http-equiv="refresh" content="0; url={target}">
+<script>location.replace({tgt_js})</script>
+</head><body style="font-family:Montserrat,sans-serif;background:#faf7f2;color:#2b2620;padding:2rem">
+<p>Redirecting to <a href="{target}">{t_esc} on VisualizeAUS</a>…</p>
+</body></html>""")
+    print(f"  Share pages: {len(chart_specs)} ({rendered} chart images rendered)")
 
 
 def parse_time_minutes(t):
@@ -1924,13 +2089,48 @@ conn2.close()
 # Escape "</" so the payload can't prematurely close its <script> tag.
 chart_specs_json = json.dumps(chart_specs, separators=(",", ":")).replace("</", "<\\/")
 
+# schema.org structured data (built separately to avoid f-string brace escaping)
+jsonld = json.dumps({
+    "@context": "https://schema.org",
+    "@type": "Dataset",
+    "name": "VisualizeAUS — AUS Course Data",
+    "description": SITE_DESC,
+    "url": SITE_URL + "/",
+    "creator": {"@type": "Person", "name": "DeadPackets"},
+    "temporalCoverage": "2005/2026",
+    "keywords": ["American University of Sharjah", "course catalog",
+                 "prerequisites", "data visualization"],
+    "isBasedOn": "https://github.com/DeadPackets/AUSCrawl",
+}, separators=(",", ":")).replace("</", "<\\/")
+
 html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VisualizeAUS — 20 Years of AUS Course Data</title>
-<meta name="description" content="Interactive visualizations of 20 years of course data from the American University of Sharjah.">
+<meta name="description" content="{SITE_DESC}">
+<link rel="canonical" href="{SITE_URL}/">
+<meta name="author" content="DeadPackets">
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf7f2">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#15110d">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="{SITE_NAME}">
+<meta property="og:locale" content="en_US">
+<meta property="og:title" content="VisualizeAUS — 20 Years of AUS Course Data">
+<meta property="og:description" content="{SITE_DESC}">
+<meta property="og:url" content="{SITE_URL}/">
+<meta property="og:image" content="{OG_IMAGE}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="VisualizeAUS — twenty years of AUS course data, visualized">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="VisualizeAUS — 20 Years of AUS Course Data">
+<meta name="twitter:description" content="{SITE_DESC}">
+<meta name="twitter:image" content="{OG_IMAGE}">
+<script type="application/ld+json">{jsonld}</script>
 <script>
 // Apply the saved/system theme before first paint to avoid a flash.
 (function () {{
@@ -2318,6 +2518,7 @@ section + section {{
 
 /* ===================== CHARTS ===================== */
 .chart-container {{
+  position: relative;
   background: var(--chart-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2326,6 +2527,51 @@ section + section {{
   box-shadow: var(--shadow-sm);
   transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }}
+
+/* per-chart "copy share link" button */
+.chart-share {{
+  position: absolute;
+  top: 0.6rem;
+  right: 0.6rem;
+  z-index: 3;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.18s ease, color 0.18s ease, border-color 0.18s ease, transform 0.1s ease;
+}}
+.chart-container:hover .chart-share, .chart-share:focus-visible {{ opacity: 1; }}
+.chart-share:hover {{ color: var(--accent); border-color: var(--accent); }}
+.chart-share:active {{ transform: scale(0.92); }}
+.chart-share svg {{ width: 16px; height: 16px; }}
+@media (hover: none) {{ .chart-share {{ opacity: 0.6; }} }}
+
+/* copy-confirmation toast */
+.toast {{
+  position: fixed;
+  bottom: 1.5rem;
+  left: 50%;
+  transform: translateX(-50%) translateY(1rem);
+  background: var(--text);
+  color: var(--bg);
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-md);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  z-index: 2000;
+}}
+.toast.show {{ opacity: 1; transform: translateX(-50%) translateY(0); }}
 
 .chart-row {{
   display: grid;
@@ -3316,6 +3562,7 @@ footer p {{ margin-top: 0.3rem; }}
     &nbsp;&middot;&nbsp; Data scraped from AUS Banner &nbsp;&middot;&nbsp; MIT License
   </p>
 </footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
 <script type="application/json" id="chart-data">{chart_specs_json}</script>
 <script>
 // ---- Data ----
@@ -3332,6 +3579,25 @@ function courseName(code) {{ return courseTitles[code] || ''; }}
 function codeWithName(code) {{
   const t = courseName(code);
   return t ? code + ' <span style="color: var(--text-muted); font-weight: 400;">' + t + '</span>' : code;
+}}
+
+// ---- Share links ----
+const SHARE_BASE = "{SITE_URL}";
+function toast(msg) {{
+  const t = document.getElementById('toast');
+  if (!t) return;
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.classList.remove('show'), 2200);
+}}
+function copyShare(id) {{
+  const url = SHARE_BASE + '/share/' + id + '/';
+  if (navigator.clipboard && navigator.clipboard.writeText) {{
+    navigator.clipboard.writeText(url).then(() => toast('Chart link copied'), () => toast(url));
+  }} else {{
+    toast(url);
+  }}
 }}
 
 // ---- Theme (dark mode) ----
@@ -3914,6 +4180,16 @@ function setupLazyCharts() {{
     entries.forEach(e => {{ if (e.isIntersecting) {{ obs.unobserve(e.target); draw(e.target); }} }});
   }}, {{ rootMargin: '600px 0px' }});
   document.querySelectorAll('.lazy-chart').forEach(el => io.observe(el));
+  // Deep link: if opened at #chart-x (e.g. via a /share/ redirect), render that
+  // chart immediately and scroll to it instead of waiting for it to intersect.
+  const m = location.hash.match(/^#(chart-[\\w-]+)$/);
+  if (m) {{
+    const el = document.getElementById(m[1]);
+    if (el && el.classList.contains('lazy-chart')) {{
+      draw(el);
+      requestAnimationFrame(() => el.scrollIntoView({{ block: 'center' }}));
+    }}
+  }}
 }}
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupLazyCharts);
 else setupLazyCharts();
@@ -3926,6 +4202,22 @@ else setupLazyCharts();
 # ---------------------------------------------------------------------------
 OUT_DIR.mkdir(exist_ok=True)
 (OUT_DIR / "index.html").write_text(html)
+
+# Social / share assets (OG card, favicon, per-chart share pages)
+og_stats = [
+    (f"{table_counts['courses']:,}", "Sections"),
+    (f"{table_counts['semesters']}", "Semesters"),
+    (f"{table_counts['instructors']:,}", "Instructors"),
+    (f"{table_counts['course_dependencies']:,}", "Dependencies"),
+    (f"{len(charts)}", "Charts"),
+]
+try:
+    make_og_card(OUT_DIR, og_stats)
+except Exception as e:
+    print(f"  [og] card skipped: {e}")
+make_favicon(OUT_DIR)
+write_share_pages(OUT_DIR)
+
 print(f"Built site: {OUT_DIR / 'index.html'}")
 print(f"  Charts: {len(charts)}")
 print(f"  File size: {len(html) / 1024 / 1024:.1f} MB")
