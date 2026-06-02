@@ -1736,8 +1736,12 @@ browse_json = df_browse_recent.to_json(orient="records")
 
 # Catalog browse
 df_cat_browse = pd.read_sql_query("""
-    SELECT subject, course_number, description, credit_hours, lecture_hours,
-           lab_hours, department FROM catalog ORDER BY subject, course_number
+    SELECT c.subject, c.course_number,
+           (SELECT x.title FROM courses x
+            WHERE x.subject = c.subject AND x.course_number = c.course_number
+              AND x.title != '' ORDER BY x.term_id DESC LIMIT 1) AS title,
+           c.description, c.credit_hours, c.lecture_hours, c.lab_hours, c.department
+    FROM catalog c ORDER BY c.subject, c.course_number
 """, conn2)
 catalog_json = df_cat_browse.to_json(orient="records")
 
@@ -2240,6 +2244,9 @@ nav .nav-brand {{
   padding-right: 1.25rem;
   margin-right: 0.5rem;
   border-right: 1px solid var(--border);
+  flex-shrink: 0;          /* pinned outside the scroller — always visible */
+  white-space: nowrap;
+  text-decoration: none;
 }}
 
 .theme-toggle {{
@@ -2745,8 +2752,8 @@ footer p {{ margin-top: 0.3rem; }}
     <div class="hero-eyebrow">American University of Sharjah</div>
     <h1>VisualizeAUS</h1>
     <p class="subtitle">
-      Twenty years of course data, visualized and made explorable.
-      Every section, instructor, prerequisite, and schedule from 2005 to 2026.
+      Twenty years of AUS course data, open to explore. Every section,
+      instructor, prerequisite, and schedule from 2005 to 2026.
     </p>
     <div class="stats-row">
       <div class="stat">
@@ -2776,9 +2783,9 @@ footer p {{ margin-top: 0.3rem; }}
 <!-- Navigation -->
 <nav>
   <div class="nav-bar">
+    <a href="#" class="nav-brand">VisualizeAUS</a>
     <div class="nav-scroll" id="nav-scroll">
       <div class="nav-inner" id="nav-inner">
-      <a href="#" class="nav-brand">VisualizeAUS</a>
       <a href="#growth">Growth</a>
       <a href="#subjects">Subjects</a>
       <a href="#levels">Levels</a>
@@ -2816,11 +2823,11 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['growth']}</div>
   <div class="explanation">
-    Each dot represents one semester. <strong>Red dots are Fall semesters</strong>, blue are Spring, and green are Summer terms. The dashed line shows the overall upward trend. AUS has grown from about 1,100 course sections per regular semester in 2005 to nearly 2,000 in 2025 &mdash; a <strong>{growth_pct:.0f}% increase</strong>. The peak was <strong>{peak_sem}</strong> with {peak_val:,} sections. Summer terms are much smaller (200-400 sections) and appear as the lower cluster.
+    Each dot is one semester. <strong>Red dots are Fall</strong>, blue are Spring, green are Summer. The dashed line is the overall trend. A regular semester went from about 1,100 sections in 2005 to nearly 2,000 in 2025, a <strong>{growth_pct:.0f}% increase</strong>. The busiest was <strong>{peak_sem}</strong> at {peak_val:,} sections. Summer terms are much smaller (200-400 sections), which is why they sit in the lower cluster.
   </div>
   <div class="chart-container">{charts['courses_vs_sections']}</div>
   <div class="explanation">
-    The blue line tracks total sections offered, while the red line tracks unique courses. Both have grown, but total sections grew faster &mdash; meaning AUS is offering <strong>more sections of existing courses</strong> (to accommodate more students) in addition to introducing new ones.
+    The blue line is total sections offered; the red line is unique courses. Both climb, but sections climb faster. So AUS isn't just adding new courses, it's running <strong>more sections of the courses it already has</strong> to fit more students.
   </div>
 </section>
 
@@ -2833,15 +2840,15 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['subjects_bar']}</div>
   <div class="explanation">
-    Mathematics (MTH) has the most sections of any subject &mdash; over 5,500 across 20 years &mdash; because nearly every student takes multiple math courses. The next largest subjects are Civil Engineering (CVE), Mechanical Engineering (MCE), and Electrical Engineering (ELE), reflecting AUS's strong engineering focus.
+    Mathematics (MTH) runs the most sections of any subject, over 5,500 across 20 years, because almost every student takes several math courses. Civil (CVE), Mechanical (MCE), and Electrical Engineering (ELE) come next. AUS is an engineering school at heart, and the subject list shows it.
   </div>
   <div class="chart-container">{charts['subject_lines']}</div>
   <div class="explanation">
-    This shows how the <strong>top 10 subjects</strong> have evolved semester by semester. Most subjects show steady or growing offerings. Engineering subjects tend to grow in step with each other, suggesting coordinated program expansion.
+    The <strong>top 10 subjects</strong>, semester by semester. Most hold steady or grow. The engineering subjects tend to rise together, which usually points to programs expanding in step.
   </div>
   <div class="chart-container">{charts['subject_heatmap']}</div>
   <div class="explanation">
-    Each cell shows the number of sections a subject offered in a given year. <strong>Darker red means more sections.</strong> You can see the overall growth pattern clearly &mdash; most subjects get darker as you move from left to right.
+    Each cell is the number of sections a subject offered in a given year. <strong>Darker red means more sections.</strong> The growth is easy to spot: most rows get darker from left to right.
   </div>
 </section>
 
@@ -2854,15 +2861,15 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['levels_over_time']}</div>
   <div class="explanation">
-    This stacked area chart shows how enrollment across different academic levels has evolved over 20 years. <strong>Undergraduate sections dominate at {undergrad_pct:.0f}%</strong> of all offerings. The Graduate program has been present since 2005, while the <strong>Doctorate program launched in 2019</strong> and the Achievement Academy started in 2011. Notice how all levels have grown over time, with the undergraduate base expanding steadily.
+    Academic levels stacked over 20 years. <strong>Undergraduate sections dominate at {undergrad_pct:.0f}%</strong> of everything offered. Graduate courses have been here since 2005; the <strong>Doctorate program launched in 2019</strong> and the Achievement Academy in 2011. Every level has grown, but it's the undergraduate base that keeps expanding.
   </div>
   <div class="chart-container">{charts['levels_dist']}</div>
   <div class="explanation">
-    The distribution across all semesters shows the massive dominance of undergraduate education at AUS, with graduate sections being the second largest category at {grad_total:,} total sections. Specialized programs like the Doctorate and Achievement Academy are smaller but growing.
+    Across all semesters, undergraduate education dominates by a wide margin. Graduate is a distant second at {grad_total:,} sections. The Doctorate and Achievement Academy are smaller, but both are growing.
   </div>
   <div class="chart-container">{charts['levels_by_subject']}</div>
   <div class="explanation">
-    This reveals which subjects serve multiple academic levels. Subjects at the top have the highest proportion of graduate-level sections. Some subjects like MBA and certain engineering programs serve a significant graduate population, while others like MTH and PHY are almost exclusively undergraduate.
+    Which subjects teach across more than one level? The ones at the top have the largest share of graduate sections. MBA and several engineering programs carry a real graduate load, while MTH and PHY stay almost entirely undergraduate.
   </div>
 </section>
 
@@ -2875,55 +2882,55 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['instructors']}</div>
   <div class="explanation">
-    The most prolific instructor has taught <strong>nearly 500 sections</strong> over their career at AUS. The color indicates how many semesters they've been active &mdash; darker blue means a longer tenure.
+    The most prolific instructor has taught <strong>nearly 500 sections</strong> over their career here. Color shows how many semesters someone has been active: darker blue is a longer tenure.
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['tenure']}</div>
     <div class="chart-container">{charts['active_instructors']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> Most instructors teach for a relatively short time &mdash; the histogram is heavily skewed toward 1-5 semesters. However, a significant number have been active for 20+ semesters (10+ years). <strong>Right:</strong> The number of active instructors has grown from about 300 in 2005 to over 500 in recent years.
+    <strong>Left:</strong> Most instructors don't stay long; the histogram piles up at 1-5 semesters. Even so, a sizeable group has taught for 20+ semesters (10+ years). <strong>Right:</strong> Active instructors per semester have grown from about 300 in 2005 to over 500 lately.
   </div>
   <div class="chart-container">{charts['instructor_diversity']}</div>
   <div class="explanation">
-    Each bubble represents an instructor. The x-axis shows total sections taught, the y-axis shows how many distinct subjects they teach, and the size reflects their tenure. <strong>Instructors in the upper-right are both prolific and versatile</strong> &mdash; teaching many sections across multiple subjects. Most instructors cluster in the lower-left (few sections, 1-2 subjects), while a handful of "superstar" instructors stand out.
+    Each bubble is an instructor. X is total sections taught, Y is how many distinct subjects they teach, and bubble size is tenure. <strong>The upper-right is prolific and versatile:</strong> lots of sections across several subjects. Most people sit in the lower-left (a few sections, 1-2 subjects), and a handful of outliers stand well apart.
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['tba_rate']}</div>
     <div class="chart-container">{charts['instructor_workload']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The TBA rate shows the percentage of sections each semester where no instructor was assigned at scrape time. High TBA in recent semesters often means instructors haven't been finalized yet. <strong>Right:</strong> The average number of sections per instructor per semester has remained relatively stable, hovering around 3-4 sections, showing consistent workload distribution.
+    <strong>Left:</strong> The TBA rate is the share of sections each semester with no instructor assigned at scrape time. A high rate in recent semesters usually just means staffing wasn't final yet. <strong>Right:</strong> Sections per instructor per semester barely moves, sitting around 3-4. Workloads stay fairly even.
   </div>
   <div class="chart-container">{charts['instructor_turnover']}</div>
   <div class="explanation">
-    Green bars show newly hired instructors (first semester teaching); red bars show departures (last semester before disappearing from the data). Of {total_ever:,} instructors who have ever taught at AUS, {still_active:,} are still active. Fall semesters consistently recruit more new faculty than Spring, reflecting annual hiring cycles.
+    Green bars are new hires (first semester teaching); red bars are departures (last semester before they vanish from the data). Of {total_ever:,} instructors who have ever taught here, {still_active:,} are still active. Fall always brings in more new faculty than Spring, which tracks the annual hiring cycle.
   </div>
   <div class="chart-container">{charts['instructor_retention']}</div>
   <div class="explanation">
-    Survival curves by hiring cohort: of instructors hired in a given period, what percentage are still teaching N years later? The steepest drop is in the first 1-2 years &mdash; many instructors teach for only a short period. Those who survive past ~5 years tend to stay much longer. Compare cohorts to see if AUS is retaining faculty better or worse over time.
+    Survival curves by hiring cohort: of the instructors hired in a given period, what share are still teaching N years later? The sharpest drop comes in the first year or two. Those who make it past about five years tend to stick around much longer. Compare cohorts to see whether retention is improving.
   </div>
   <div class="chart-container">{charts['course_ownership']}</div>
   <div class="explanation">
-    Each dot is a course. <strong>Green dots in the lower-right</strong> are "owned" courses: offered for many semesters but taught by very few instructors (high continuity). <strong>Red dots in the upper-right</strong> are high-turnover courses: many semesters AND many different instructors rotating through. Dot size indicates total sections taught.
+    Each dot is a course. <strong>Green dots, lower-right:</strong> "owned" courses, offered for many semesters but taught by very few people (high continuity). <strong>Red dots, upper-right:</strong> high-turnover courses, many semesters and many instructors cycling through. Dot size is total sections taught.
   </div>
   <div class="chart-container">{charts['course_ownership_top']}</div>
   <div class="explanation">
-    The longest instructor-course pairings in AUS history. <strong>{most_owned_instructor}</strong> has taught <strong>{most_owned_course}</strong> for {most_owned_terms} semesters &mdash; an extraordinary run of continuity. These are the courses where one person has become synonymous with the class.
+    The longest instructor-course pairings in AUS history. <strong>{most_owned_instructor}</strong> has taught <strong>{most_owned_course}</strong> for {most_owned_terms} semesters straight. These are the courses where one name has basically become the class.
   </div>
 
   <h3 class="chains-title" id="team-teaching">Team Teaching</h3>
-  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The charts above credit each section to its instructor of record. But AUSCrawl now captures <strong>every</strong> instructor on a section &mdash; so we can finally see co-teaching. <strong>{co_overall_pct}% of all sections are taught by two or more instructors.</strong></p>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The charts above credit each section to its instructor of record. AUSCrawl now captures <strong>every</strong> instructor on a section, so co-teaching finally shows up. <strong>{co_overall_pct}% of all sections have two or more instructors.</strong></p>
   <div class="chart-row">
     <div class="chart-container">{charts['co_time']}</div>
     <div class="chart-container">{charts['co_dept']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The share of co-taught sections each semester. <strong>Right:</strong> Co-teaching is overwhelmingly an <strong>engineering and lab-science</strong> phenomenon &mdash; Biomedical (BME), Materials (MSE), and Mechatronics (MTR) lead, where capstones, design studios, and supervised labs routinely pair instructors. Lecture-heavy subjects rarely co-teach.
+    <strong>Left:</strong> the share of co-taught sections each semester. <strong>Right:</strong> co-teaching is mostly an <strong>engineering and lab-science</strong> thing. Biomedical (BME), Materials (MSE), and Mechatronics (MTR) lead, where capstones, design studios, and supervised labs routinely put two instructors on one section. Lecture-heavy subjects rarely bother.
   </div>
   {'<div class="chart-container">' + charts.get("co_pairs", "") + '</div>' if "co_pairs" in charts else ""}
   <div class="explanation">
-    The instructor pairs who have shared the most sections &mdash; long-running teaching partnerships, typically co-supervising the same lab or capstone sequence year after year.
+    The instructor pairs who have shared the most sections. These are long-running partnerships, usually co-supervising the same lab or capstone sequence year after year.
   </div>
 </section>
 
@@ -2936,11 +2943,11 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['modality_over_time']}</div>
   <div class="explanation">
-    This chart shows the evolution of teaching methods at AUS. <strong>Traditional (in-person) instruction dominates</strong> across almost every semester. The most dramatic shift occurred during <strong>COVID-19 (2020-2021)</strong>, when non-traditional delivery surged. After the pandemic, AUS largely returned to traditional methods, though some non-traditional instruction persists.
+    How teaching methods have shifted at AUS. <strong>Traditional, in-person instruction dominates</strong> in almost every semester. The one big break was <strong>COVID-19 (2020-2021)</strong>, when non-traditional delivery spiked. After the pandemic AUS mostly went back to in-person, though a little non-traditional teaching stuck around.
   </div>
   <div class="chart-container">{charts['modality_by_subject']}</div>
   <div class="explanation">
-    Not all subjects adopted non-traditional teaching equally. This chart shows which subjects had the highest proportion of non-traditional sections across all time. Some subjects naturally lend themselves to online/blended formats, while others (especially lab-heavy engineering and science courses) remained largely in-person.
+    Subjects didn't all move online at the same rate. This ranks them by the share of sections taught in a non-traditional format. Some subjects take to online or blended formats easily; lab-heavy engineering and science courses mostly stayed in-person.
   </div>
 </section>
 
@@ -2953,19 +2960,19 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['covid_sections']}</div>
   <div class="explanation">
-    Total sections barely dipped: Fall 2019 had {f19_sections} sections, Fall 2020 had {f20_sections} ({covid_section_change:+.1f}%). The real story is what came <em>after</em> &mdash; AUS surged to {latest_sections} sections by {latest_term} ({growth_since:+.1f}% vs Fall 2019). Course variety (red dashed line) dipped more noticeably, falling {abs(course_variety_drop):.1f}% by Spring 2021 as the university consolidated offerings while maintaining section counts.
+    Total sections barely dipped: Fall 2019 had {f19_sections}, Fall 2020 had {f20_sections} ({covid_section_change:+.1f}%). The real story is what came <em>after</em>. AUS climbed to {latest_sections} sections by {latest_term} ({growth_since:+.1f}% vs Fall 2019). Course variety (red dashed line) fell harder, down {abs(course_variety_drop):.1f}% by Spring 2021, as the university trimmed its course list but kept section counts up.
   </div>
   <div class="chart-container">{charts['covid_variety']}</div>
   <div class="explanation">
-    Instructor count fell from {f19_inst} (Fall 2019) to {f20_inst} (Fall 2020), a {abs(inst_change):.1f}% decline. Combined with fewer unique courses, this suggests AUS kept sections running by concentrating teaching among fewer instructors on a narrower set of courses &mdash; a resilience strategy, not a collapse.
+    Instructor count dropped from {f19_inst} (Fall 2019) to {f20_inst} (Fall 2020), a {abs(inst_change):.1f}% decline. With fewer unique courses too, it looks like AUS kept sections running by concentrating teaching among fewer instructors on a narrower set of courses. That reads as a coping strategy, not a collapse.
   </div>
   <div class="chart-container">{charts['covid_subjects']}</div>
   <div class="explanation">
-    Each cell shows a subject's section count indexed to <strong>Fall 2019 = 100</strong>. Green cells above 100 mean growth; red below 100 means contraction. During Fall 2020, {subjects_shrank} subjects shrank by 10%+, {subjects_grew} grew by 10%+, and {subjects_stable} held steady. Language programs (ELP, ARA) and media (MCM) were hit hardest, while computing (CMP, COE) and sustainability (ESM) expanded &mdash; reflecting a shift toward technical subjects during the pandemic.
+    Each cell is a subject's section count indexed to <strong>Fall 2019 = 100</strong>. Green above 100 is growth; red below 100 is contraction. In Fall 2020, {subjects_shrank} subjects shrank by 10%+, {subjects_grew} grew by 10%+, and {subjects_stable} held steady. Language programs (ELP, ARA) and media (MCM) took the worst of it; computing (CMP, COE) and sustainability (ESM) grew. The pandemic tilted things toward technical subjects.
   </div>
   <div class="chart-container">{charts['covid_classrooms']}</div>
   <div class="explanation">
-    The most lasting COVID effect: sections without an assigned physical classroom rose from {precovid_noroom}% (Fall 2019) to {latest_noroom}% ({latest_term}). This didn't spike during COVID itself, but climbed steadily afterward &mdash; suggesting a permanent structural shift toward flexible or unassigned scheduling that outlasted the pandemic.
+    The most lasting COVID effect: sections with no assigned physical classroom rose from {precovid_noroom}% (Fall 2019) to {latest_noroom}% ({latest_term}). Oddly, it didn't spike during COVID itself; it crept up afterward. That looks like a permanent move toward flexible or unassigned scheduling that outlasted the pandemic.
   </div>
 </section>
 
@@ -2978,22 +2985,22 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['schedule_heatmap']}</div>
   <div class="explanation">
-    This heatmap shows <strong>how many course sections are scheduled at each day-time combination</strong> across all 20 years. The busiest slots are <strong>Monday and Wednesday around 11:00 AM and 2:00 PM</strong>. Sunday through Thursday are the main teaching days (the UAE work week).
+    <strong>How many sections land at each day-and-time slot</strong>, across all 20 years. The busiest are <strong>Monday and Wednesday around 11:00 AM and 2:00 PM</strong>. Sunday through Thursday do the heavy lifting (the UAE work week).
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['day_patterns']}</div>
     <div class="chart-container">{charts['buildings']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The two dominant scheduling patterns are <strong>Mon/Wed (MW)</strong> and <strong>Tue/Thu/Sun (TRU)</strong>, together accounting for over half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections, followed by the Language Building and Engineering Building Right.
+    <strong>Left:</strong> two patterns dominate, <strong>Mon/Wed (MW)</strong> and <strong>Tue/Thu/Sun (TRU)</strong>, and together they cover more than half of all sections. <strong>Right:</strong> New Academic Building 1 hosts the most sections, then the Language Building and Engineering Building Right.
   </div>
   <div class="chart-container">{charts['saturday_decline']}</div>
   <div class="explanation">
-    One of the most dramatic shifts in AUS scheduling: Saturday classes peaked at <strong>{sat_peak_count} sections ({sat_peak_pct}% of all sections)</strong> in <strong>{sat_peak_term}</strong>, then collapsed to near-zero by 2010. The most recent semester has just {sat_recent_count} Saturday sections. AUS effectively transitioned from a 6-day to a 5-day teaching week within a few years.
+    One of the sharpest shifts in AUS scheduling. Saturday classes peaked at <strong>{sat_peak_count} sections ({sat_peak_pct}% of all sections)</strong> in <strong>{sat_peak_term}</strong>, then collapsed to near-zero by 2010. The latest semester has just {sat_recent_count} Saturday sections. In a few years AUS went from a six-day teaching week to five.
   </div>
   <div class="chart-container">{charts['day_pattern_evolution']}</div>
   <div class="explanation">
-    The full evolution of scheduling patterns over 20 years. As Saturday classes (yellow) disappeared, the <strong>MW</strong> and <strong>TRU</strong> patterns consolidated their dominance. Note the Tue/Thu (TR, without Sunday) pattern and single-day classes as persistent but smaller shares. The daily (MTWRU) pattern is mostly summer/intensive courses.
+    Scheduling patterns across the full 20 years. As Saturday classes (yellow) faded out, <strong>MW</strong> and <strong>TRU</strong> took over even more. Tue/Thu (TR, no Sunday) and single-day classes hang on as smaller slices. The daily (MTWRU) pattern is mostly summer and intensive courses.
   </div>
 </section>
 
@@ -3006,19 +3013,19 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['new_courses']}</div>
   <div class="explanation">
-    This shows how many completely new courses were introduced each year. The peak was <strong>{peak_new_year}</strong> with <strong>{peak_new_count} new courses</strong>. The early years (2005-2008) show high counts because the database starts in 2005 &mdash; many courses that already existed appear as "new" in the first captured year. After that baseline, the rate of new course introduction reveals genuine curriculum expansion.
+    How many brand-new courses showed up each year. The peak was <strong>{peak_new_year}</strong> with <strong>{peak_new_count} new courses</strong>. The early years (2005-2008) look inflated because the data starts in 2005, so courses that already existed get counted as "new" the first time they appear. Past that baseline, the rate is real curriculum growth.
   </div>
   <div class="chart-container">{charts['course_longevity']}</div>
   <div class="explanation">
-    How long do courses survive in the catalog? <strong>{one_sem_courses} courses ({one_sem_pct}%) were offered in only one semester</strong> &mdash; these are likely special topics, experimental courses, or one-off offerings. Meanwhile, <strong>{veteran_courses} courses have been offered for 30+ semesters</strong> (15+ years), forming the stable core of the AUS curriculum.
+    How long do courses last in the catalog? <strong>{one_sem_courses} courses ({one_sem_pct}%) ran for a single semester</strong>, usually special topics, experimental sections, or one-offs. At the other end, <strong>{veteran_courses} courses have run for 30+ semesters</strong> (15+ years). Those are the stable core of the curriculum.
   </div>
   <div class="chart-container">{charts['most_consistent']}</div>
   <div class="explanation">
-    These are the marathon runners of the AUS curriculum &mdash; courses that have been offered the most semesters. Foundational courses in math, English, physics, and engineering dominate this list, as they serve the widest student populations.
+    The marathon runners of the curriculum: the courses offered in the most semesters. Foundational math, English, physics, and engineering courses fill the list, because they reach the most students.
   </div>
   <div class="chart-container">{charts['courses_discontinued']}</div>
   <div class="explanation">
-    This shows courses that were last offered before 2020 (having previously been offered for at least 5 semesters). These are <strong>{total_discontinued} courses that appear to have been discontinued</strong> &mdash; removed from the active curriculum. Spikes in certain years may correspond to department restructuring or program changes.
+    Courses last offered before 2020 that had previously run for at least five semesters. That's <strong>{total_discontinued} courses that look discontinued</strong>, dropped from the active curriculum. Spikes in particular years often line up with department restructuring or program changes.
   </div>
 </section>
 
@@ -3031,7 +3038,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['prereq_connected']}</div>
   <div class="explanation">
-    Red bars show how many other courses list this course as a prerequisite, while blue bars show how many prerequisites it requires. Foundational courses like intro math, physics, and programming have enormous outgoing connections.
+    Red bars are how many other courses list this one as a prerequisite; blue bars are how many prerequisites it requires. Intro math, physics, and programming sit at the top, with far more courses depending on them than the other way around.
   </div>
 
   <h3 class="chains-title">Longest Prerequisite Chains</h3>
@@ -3042,46 +3049,46 @@ footer p {{ margin-top: 0.3rem; }}
 
   <div class="chart-container" style="margin-top: 2rem">{charts['coe_network']}</div>
   <div class="explanation">
-    This interactive network graph shows all <strong>Computer Engineering (COE) courses</strong> and their prerequisites. Red nodes are COE courses; blue nodes are prerequisites from other departments. Hover over nodes to see course names.
+    An interactive map of every <strong>Computer Engineering (COE) course</strong> and its prerequisites. Red nodes are COE courses; blue nodes are prerequisites from other departments. Hover a node to see the course name.
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['prereq_complexity']}</div>
     <div class="chart-container">{charts['cross_dept']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> Departments ranked by average prerequisites per course. Engineering and science departments have the most complex prerequisite structures. <strong>Right:</strong> A matrix showing which departments depend on which others for prerequisites. Many engineering departments depend heavily on MTH and PHY courses.
+    <strong>Left:</strong> departments ranked by average prerequisites per course. Engineering and science carry the most complex requirement structures. <strong>Right:</strong> a matrix of which departments lean on which others for prerequisites. Most engineering departments lean hard on MTH and PHY.
   </div>
 
   <h3 class="chains-title" id="prereq-logic">Prerequisite Logic &amp; Complexity</h3>
-  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The graph above counts prerequisite <em>links</em>. But AUSCrawl also parses each requirement into its full <strong>boolean logic tree</strong> &mdash; the AND/OR structure students actually navigate. <strong>{or_share}% of courses with prerequisites offer at least one "or" alternative path.</strong></p>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The graph above counts prerequisite <em>links</em>. AUSCrawl also parses each requirement into its full <strong>boolean logic tree</strong>, the AND/OR structure students actually have to navigate. <strong>{or_share}% of courses with prerequisites offer at least one "or" alternative.</strong></p>
   <div class="chart-row">
     <div class="chart-container">{charts['prereq_shape']}</div>
     <div class="chart-container">{charts['prereq_depth']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> Most prerequisites are not a simple checklist. Beyond single-course and pure "all of these" (AND) requirements, a large share offer <strong>alternative paths</strong> (OR) or genuinely <strong>nested</strong> logic like "MTH 103 AND (PHY 101 OR PHY 102)". <strong>Right:</strong> How deeply nested that logic gets &mdash; depth 1 is a lone course, depth 2 is a single AND/OR group, and depth 3+ mixes them.
+    <strong>Left:</strong> most prerequisites aren't a simple checklist. Plenty go beyond single-course or pure "all of these" (AND) rules, offering <strong>alternative paths</strong> (OR) or properly <strong>nested</strong> logic like "MTH 103 AND (PHY 101 OR PHY 102)". <strong>Right:</strong> how deep that nesting goes. Depth 1 is a lone course, depth 2 is a single AND/OR group, depth 3+ mixes them.
   </div>
   <div class="chart-row">
     <div class="chart-container">{charts['prereq_gateways']}</div>
     <div class="chart-container">{charts['prereq_flex']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The toughest gateways &mdash; courses with the most <strong>mandatory</strong> prerequisites (courses that must <em>all</em> be passed, ignoring optional OR branches). <strong>{toughest.course}</strong> tops the list with {int(toughest.mandatory)}. <strong>Right:</strong> Which departments build flexibility into their curriculum &mdash; the share of their gated courses that offer at least one alternative path rather than a rigid chain.
+    <strong>Left:</strong> the toughest gateways, the courses with the most <strong>mandatory</strong> prerequisites (ones that must <em>all</em> be passed, setting aside optional OR branches). <strong>{toughest.course}</strong> tops the list with {int(toughest.mandatory)}. <strong>Right:</strong> which departments build in flexibility, measured as the share of their gated courses that offer at least one alternative path instead of a rigid chain.
   </div>
   <div class="chart-container">{charts['prereq_concurrent']}</div>
   <div class="explanation">
-    Some prerequisites may be taken <strong>concurrently</strong> ("may be taken together") rather than strictly beforehand &mdash; common for lecture/lab or theory/practice pairs. Overall, <strong>{concurrent_overall}% of prerequisite requirements</strong> allow a concurrent course, and the practice has shifted over time.
+    Some prerequisites can be taken <strong>concurrently</strong> ("may be taken together") instead of strictly beforehand, which is common for lecture/lab or theory/practice pairs. Overall, <strong>{concurrent_overall}% of prerequisite requirements</strong> allow a concurrent course, and that share has moved around over the years.
   </div>
 
   <h3 class="chains-title">Corequisite Analysis</h3>
   <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">Corequisites are courses that must be taken simultaneously. AUS has <strong>{total_coreq_links:,}</strong> corequisite links across the curriculum.</p>
   {'<div class="chart-container">' + charts.get("coreq_top", "") + '</div>' if "coreq_top" in charts else ""}
   <div class="explanation">
-    The most common corequisite pairs are typically lecture-lab combinations (e.g., a physics lecture with its corresponding lab). These mandatory pairings ensure students get both theoretical and practical instruction simultaneously.
+    The most common corequisite pairs are lecture-lab combos, like a physics lecture with its matching lab. Pairing them forces students to take the theory and the hands-on part in the same semester.
   </div>
   {'<div class="chart-container">' + charts.get("coreq_vs_prereq", "") + '</div>' if "coreq_vs_prereq" in charts else ""}
   <div class="explanation">
-    This compares the number of prerequisite vs corequisite requirements by department. Most departments rely more heavily on prerequisites, but some (especially lab-intensive programs) have significant corequisite requirements.
+    Prerequisite vs corequisite counts by department. Most departments lean on prerequisites, but lab-intensive programs carry a lot of corequisites too.
   </div>
 </section>
 
@@ -3094,11 +3101,11 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['grades']}</div>
   <div class="explanation">
-    Each bar shows how many prerequisite links require that minimum grade. <strong>C- dominates overwhelmingly</strong> as the university-wide standard passing grade. The second most common is <strong>C (no minus)</strong>, followed by <strong>A-</strong> &mdash; used in competitive programs.
+    Each bar is how many prerequisite links require that minimum grade. <strong>C- dominates</strong>, since it's the university-wide standard pass. Next is <strong>C (no minus)</strong>, then <strong>A-</strong>, which shows up in the more competitive programs.
   </div>
   <div class="chart-container">{charts['grade_strictness']}</div>
   <div class="explanation">
-    Each department's bar shows the <strong>percentage breakdown</strong> of grade levels required for its prerequisites. Departments on the left have the highest proportion of strict requirements (A or B range). Green (C-) dominates for most departments.
+    Each department's bar is the <strong>percentage breakdown</strong> of grade levels it requires for prerequisites. Departments on the left ask for the strictest grades (A or B range). For most, green (C-) is the bulk of it.
   </div>
 </section>
 
@@ -3111,21 +3118,21 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
   <div class="chart-container">{charts['attributes_dist']}</div>
   <div class="explanation">
-    Course attributes are tags that classify courses for general education requirements, major electives, and special designations. <strong>"Preparatory"</strong> and <strong>"MTH Major Elective"</strong> are the most common tags. Science requirements, communication courses, and social science requirements round out the top categories &mdash; reflecting AUS's broad general education structure.
+    Course attributes are tags that mark courses for gen-ed requirements, major electives, and special designations. <strong>"Preparatory"</strong> and <strong>"MTH Major Elective"</strong> are the most common. Science, communication, and social-science requirements fill out the rest of the top of the list, about what you'd expect from a broad gen-ed program.
   </div>
   <div class="chart-container">{charts['attributes_over_time']}</div>
   <div class="explanation">
-    This stacked area chart shows how different categories of course attributes have evolved over time. Growth in "Communication/English" and "Natural Sciences" tags reflects expanding gen-ed requirements. The overall increase in tagged sections mirrors the university's growth in total offerings.
+    Attribute categories stacked over time. The rise in "Communication/English" and "Natural Sciences" tags tracks gen-ed requirements expanding. The overall jump in tagged sections mostly just follows the growth in total offerings.
   </div>
 
   <h3 class="chains-title" id="degree-requirements">Degree Requirement Mapping</h3>
-  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The catalog tags each course with the degree programs it counts toward &mdash; an elective for this major, a requirement for that minor. Mapping those tags reveals how courses are shared across the university's degree programs.</p>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The catalog tags each course with the degree programs it counts toward: an elective for this major, an option for that minor. Mapping those tags shows how courses get shared across programs.</p>
   <div class="chart-row">
     <div class="chart-container">{charts['program_electives']}</div>
     <div class="chart-container">{charts['reusable_courses']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> Which degree programs offer students the widest menu of elective courses. <strong>Right:</strong> The most <strong>reusable</strong> courses &mdash; single courses that count toward the largest number of distinct degree programs. These are the curriculum's connective tissue: foundational and business courses that satisfy electives across many majors and minors at once.
+    <strong>Left:</strong> which programs give students the widest menu of elective options. <strong>Right:</strong> the most <strong>reusable</strong> courses, the single courses that count toward the most distinct programs. These are the connective tissue of the curriculum: foundational and business courses that satisfy electives across many majors and minors at once.
   </div>
 </section>
 
@@ -3141,11 +3148,11 @@ footer p {{ margin-top: 0.3rem; }}
     <div class="chart-container">{charts['lab_lecture']}</div>
   </div>
   <div class="explanation">
-    <strong>Left:</strong> The vast majority of AUS courses are 3-credit courses. Labs, independent studies, and capstones often differ from the 3-credit standard. <strong>Right:</strong> Blue bars show lecture hours and red bars show lab hours by department. Engineering and science departments have significantly more lab hours.
+    <strong>Left:</strong> most AUS courses are worth 3 credits. Labs, independent studies, and capstones are where the exceptions live. <strong>Right:</strong> blue bars are lecture hours, red bars are lab hours, by department. Engineering and science departments rack up far more lab hours.
   </div>
   <div class="chart-container">{charts['lecture_lab']}</div>
   <div class="explanation">
-    The stacked bars show absolute counts of lab vs lecture sections, while the green line shows the percentage of labs. The lab percentage has remained fairly stable at around 15-20%.
+    The stacked bars are raw counts of lab vs lecture sections; the green line is the lab share. That share has held fairly steady at around 15-20%.
   </div>
 </section>
 
@@ -3157,25 +3164,25 @@ footer p {{ margin-top: 0.3rem; }}
     <p>What Banner reveals about demand and who is allowed to register.</p>
   </div>
   <div class="insight">
-    <strong>A note on the data:</strong> AUS Banner never publishes seat counts or enrollment totals &mdash; only a binary <em>"open seats: yes/no"</em> flag captured at crawl time. For a <strong>completed</strong> term that flag effectively records whether a section <em>closed</em> (filled up); it is not a true fill rate (enrolled ÷ capacity), which the source data cannot support. The term currently in open registration is excluded from these charts, since its seats are still changing.
+    <strong>A note on the data:</strong> AUS Banner never publishes seat counts or enrollment totals, just a binary <em>"open seats: yes/no"</em> flag captured at crawl time. For a <strong>completed</strong> term, that flag effectively records whether a section <em>closed</em> (filled up). It is not a true fill rate (enrolled ÷ capacity), which the source data can't give us. The term currently in open registration is left out of these charts, since its seats are still changing.
   </div>
   <div class="chart-container">{charts['enrollment']}</div>
   <div class="explanation">
-    Each bar is a completed semester, split into sections that still <strong>had open seats (green)</strong> and those that <strong>closed with none remaining (red)</strong>; the line tracks the closure percentage. Closures have climbed steadily &mdash; from about <strong>{closure_early:.0f}%</strong> of sections in the late 2000s to <strong>{closure_recent:.0f}%</strong> in recent years &mdash; consistent with a growing student body filling sections more tightly.
+    Each bar is a completed semester, split into sections that still <strong>had open seats (green)</strong> and those that <strong>closed with none left (red)</strong>; the line is the closure percentage. Closures have climbed steadily, from about <strong>{closure_early:.0f}%</strong> in the late 2000s to <strong>{closure_recent:.0f}%</strong> lately. That fits a growing student body packing sections more tightly.
   </div>
   <div class="chart-container">{charts['fill_rate']}</div>
   <div class="explanation">
-    Subjects ranked by the share of their sections that closed (no open seats remaining). <strong>Higher bars suggest tighter capacity and stronger demand</strong> &mdash; though remember this is a binary snapshot, not a measured fill rate.
+    Subjects ranked by the share of their sections that closed (no open seats left). <strong>Higher bars point to tighter capacity and stronger demand</strong>, but keep in mind this is a binary snapshot, not a measured fill rate.
   </div>
-  {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and type. The boxes show the spread of fee amounts. Different colleges charge different technology fee tiers.</div>' if "fees" in charts else ""}
-  {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">Fee trends over time reflect general cost inflation and evolving technology requirements across different colleges.</div>' if "fee_trend" in charts else ""}
+  {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and course type. The boxes show the spread of fee amounts, and the tiers differ from one college to the next.</div>' if "fees" in charts else ""}
+  {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">Fees drift upward over time, roughly tracking inflation and rising tech costs across colleges.</div>' if "fee_trend" in charts else ""}
   <div class="chart-container">{charts['restrictions_typed']}</div>
   <div class="explanation">
     Each restriction is parsed into a typed <strong>include</strong> ("must be") or <strong>exclude</strong> ("must not be") rule. <strong>{restricted_pct}% of sections carry at least one restriction</strong>, but the chart sets aside the near-universal academic-level gates (every undergraduate course is "undergraduate-only") to surface the rules that genuinely narrow who can register. Rules tied to a specific college, major, program, or field of study apply to <strong>{selective_section_pct}% of all sections</strong>.
   </div>
   <div class="chart-container">{charts['restricted_courses']}</div>
   <div class="explanation">
-    {selective_restricted} courses carry a college-, major-, or program-specific rule at some point; the most frequently restricted are shown here &mdash; typically senior capstones, clinical courses, and cohort-based graduate seminars reserved for students already in the program.
+    {selective_restricted} courses carry a college-, major-, or program-specific rule at some point. The most-restricted ones are here: mostly senior capstones, clinical courses, and cohort-based graduate seminars held for students already in the program.
   </div>
 </section>
 
@@ -3184,7 +3191,7 @@ footer p {{ margin-top: 0.3rem; }}
   <div class="section-header">
     <div class="section-num">14 &mdash; Browse &amp; Explore</div>
     <h2>Explore the Dataset</h2>
-    <p>Search any course for its full profile and prerequisite roadmap, look up instructors, browse degree programs, or scan the raw tables &mdash; everything is cross-linked, so one click jumps to the next.</p>
+    <p>Search any course for its full profile and prerequisite roadmap, look up instructors, browse degree programs, or dig through the raw tables. Everything is cross-linked, so one click jumps to the next.</p>
   </div>
 
   <div class="tabs" role="tablist" aria-label="Browse and explore views">
@@ -3197,7 +3204,7 @@ footer p {{ margin-top: 0.3rem; }}
 
   <div id="tab-courses" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-courses" tabindex="0">
     <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">The 5,000 most recent sections. Use the Course Explorer above for full course histories.</p>
-    <div class="mini-summary"><div class="cx-label">Top subjects in this view &mdash; updates as you search/filter</div><div id="courses-summary" class="mini-bars"></div></div>
+    <div class="mini-summary"><div class="cx-label">Top subjects in this view, updating as you search or filter</div><div id="courses-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
         <input type="text" id="courses-search" aria-label="Search recent course sections" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
@@ -3227,7 +3234,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
 
   <div id="tab-catalog" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-catalog" tabindex="0">
-    <div class="mini-summary"><div class="cx-label">Credit hours in this view &mdash; updates as you search</div><div id="catalog-summary" class="mini-bars"></div></div>
+    <div class="mini-summary"><div class="cx-label">Credit hours in this view, updating as you search</div><div id="catalog-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
         <input type="text" id="catalog-search" aria-label="Search the course catalog" placeholder="Search catalog &mdash; try a subject, keyword, or department..." oninput="filterTable('catalog')">
@@ -3238,11 +3245,12 @@ footer p {{ margin-top: 0.3rem; }}
             <tr>
               <th onclick="sortTable('catalog', 0)">Subject</th>
               <th onclick="sortTable('catalog', 1)">Number</th>
-              <th onclick="sortTable('catalog', 2)">Description</th>
-              <th onclick="sortTable('catalog', 3)">Credits</th>
-              <th onclick="sortTable('catalog', 4)">Lecture</th>
-              <th onclick="sortTable('catalog', 5)">Lab</th>
-              <th onclick="sortTable('catalog', 6)">Department</th>
+              <th onclick="sortTable('catalog', 2)">Course Name</th>
+              <th onclick="sortTable('catalog', 3)">Description</th>
+              <th onclick="sortTable('catalog', 4)">Credits</th>
+              <th onclick="sortTable('catalog', 5)">Lecture</th>
+              <th onclick="sortTable('catalog', 6)">Lab</th>
+              <th onclick="sortTable('catalog', 7)">Department</th>
             </tr>
           </thead>
           <tbody id="catalog-body"></tbody>
@@ -3400,6 +3408,7 @@ function renderTable(type, data) {{
   }} else {{
     body.innerHTML = rows.map(r => `<tr>
       <td>${{r.subject}}</td><td>${{r.course_number}}</td>
+      <td>${{r.title || '-'}}</td>
       <td title="${{r.description || ''}}">${{(r.description || '').substring(0, 80)}}${{(r.description || '').length > 80 ? '...' : ''}}</td>
       <td>${{r.credit_hours || '-'}}</td>
       <td>${{r.lecture_hours || '-'}}</td>
@@ -3469,7 +3478,7 @@ function sortTable(type, col) {{
   let data = type === 'courses' ? [...courseData] : [...catalogData];
   const keys = type === 'courses'
     ? ['subject','course_number','title','instructor_name','days','start_time','classroom','term_name']
-    : ['subject','course_number','description','credit_hours','lecture_hours','lab_hours','department'];
+    : ['subject','course_number','title','description','credit_hours','lecture_hours','lab_hours','department'];
 
   data.sort((a, b) => {{
     const va = a[keys[col]] || '';
@@ -3814,7 +3823,7 @@ filterTable('catalog');
 // Active nav on scroll — highlight the current section's link, keep it scrolled
 // into view within the horizontal nav, and expose it to assistive tech.
 const sections = document.querySelectorAll('section[id]');
-const navLinks = document.querySelectorAll('nav a[href^="#"]');
+const navLinks = document.querySelectorAll('nav a[href^="#"]:not(.nav-brand)');
 let activeNavId = '';
 function syncActiveNav() {{
   let current = '';
