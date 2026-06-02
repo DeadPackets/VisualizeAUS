@@ -2044,6 +2044,30 @@ select:focus-visible, .tab:focus-visible, .cx-chip:focus-visible,
   outline-offset: 2px;
   border-radius: var(--radius-sm);
 }}
+/* The main region is only a skip-link target — don't ring the whole page. */
+#main-content:focus, #main-content:focus-visible {{ outline: none; }}
+
+/* Skip-to-content link: hidden until focused via keyboard. */
+.skip-link {{
+  position: absolute;
+  left: 1rem;
+  top: -4rem;
+  z-index: 1000;
+  background: var(--accent);
+  color: #fff;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  text-decoration: none;
+  box-shadow: var(--shadow-md);
+  transition: top 0.2s ease;
+}}
+.skip-link:focus {{ top: 1rem; }}
+
+/* Autocomplete suggestion options. */
+.sugg-opt:hover {{ background: var(--bg-warm); }}
+/* Keyboard-active option needs a clear, distinct indicator (sole cue). */
+.sugg-opt[aria-selected="true"] {{ background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }}
 
 /* Cleaner line breaks: balance short headings, avoid orphans in body copy. */
 h1, h2, h3, .section-header h2 {{ text-wrap: balance; }}
@@ -2713,6 +2737,8 @@ footer p {{ margin-top: 0.3rem; }}
 </head>
 <body>
 
+<a class="skip-link" href="#main-content">Skip to content</a>
+
 <!-- Hero -->
 <div class="hero">
   <div class="hero-inner">
@@ -2779,7 +2805,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
 </nav>
 
-<div class="container">
+<main class="container" id="main-content" tabindex="-1">
 
 <!-- 1. Growth -->
 <section id="growth">
@@ -3161,20 +3187,20 @@ footer p {{ margin-top: 0.3rem; }}
     <p>Search any course for its full profile and prerequisite roadmap, look up instructors, browse degree programs, or scan the raw tables &mdash; everything is cross-linked, so one click jumps to the next.</p>
   </div>
 
-  <div class="tabs">
-    <div class="tab active" onclick="switchTab('course-explorer')">Course Explorer</div>
-    <div class="tab" onclick="switchTab('inst-explorer')">Instructor Lookup</div>
-    <div class="tab" onclick="switchTab('degree-explorer')">Degree Explorer</div>
-    <div class="tab" onclick="switchTab('courses')">Recent Courses</div>
-    <div class="tab" onclick="switchTab('catalog')">Course Catalog</div>
+  <div class="tabs" role="tablist" aria-label="Browse and explore views">
+    <div class="tab active" role="tab" id="tabbtn-course-explorer" aria-controls="tab-course-explorer" aria-selected="true" tabindex="0" onclick="switchTab('course-explorer')">Course Explorer</div>
+    <div class="tab" role="tab" id="tabbtn-inst-explorer" aria-controls="tab-inst-explorer" aria-selected="false" tabindex="-1" onclick="switchTab('inst-explorer')">Instructor Lookup</div>
+    <div class="tab" role="tab" id="tabbtn-degree-explorer" aria-controls="tab-degree-explorer" aria-selected="false" tabindex="-1" onclick="switchTab('degree-explorer')">Degree Explorer</div>
+    <div class="tab" role="tab" id="tabbtn-courses" aria-controls="tab-courses" aria-selected="false" tabindex="-1" onclick="switchTab('courses')">Recent Courses</div>
+    <div class="tab" role="tab" id="tabbtn-catalog" aria-controls="tab-catalog" aria-selected="false" tabindex="-1" onclick="switchTab('catalog')">Course Catalog</div>
   </div>
 
-  <div id="tab-courses" class="tab-content">
+  <div id="tab-courses" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-courses" tabindex="0">
     <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">The 5,000 most recent sections. Use the Course Explorer above for full course histories.</p>
     <div class="mini-summary"><div class="cx-label">Top subjects in this view &mdash; updates as you search/filter</div><div id="courses-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="courses-search" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
+        <input type="text" id="courses-search" aria-label="Search recent course sections" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
         <select id="courses-semester" onchange="filterTable('courses')">
           <option value="">All Semesters</option>
         </select>
@@ -3200,11 +3226,11 @@ footer p {{ margin-top: 0.3rem; }}
     </div>
   </div>
 
-  <div id="tab-catalog" class="tab-content">
+  <div id="tab-catalog" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-catalog" tabindex="0">
     <div class="mini-summary"><div class="cx-label">Credit hours in this view &mdash; updates as you search</div><div id="catalog-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="catalog-search" placeholder="Search catalog &mdash; try a subject, keyword, or department..." oninput="filterTable('catalog')">
+        <input type="text" id="catalog-search" aria-label="Search the course catalog" placeholder="Search catalog &mdash; try a subject, keyword, or department..." oninput="filterTable('catalog')">
       </div>
       <div class="table-scroll">
         <table id="catalog-table">
@@ -3226,12 +3252,12 @@ footer p {{ margin-top: 0.3rem; }}
     </div>
   </div>
 
-  <div id="tab-course-explorer" class="tab-content active">
+  <div id="tab-course-explorer" class="tab-content active" role="tabpanel" aria-labelledby="tabbtn-course-explorer" tabindex="0">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="dep-search" placeholder="Type a course code &mdash; e.g. COE 420, MTH 104, PHY 101..." oninput="searchDeps(this.value)" autocomplete="off">
+        <input type="text" id="dep-search" aria-label="Search for a course to explore" role="combobox" aria-expanded="false" aria-controls="dep-suggestions" aria-autocomplete="list" aria-haspopup="listbox" placeholder="Type a course code &mdash; e.g. COE 420, MTH 104, PHY 101..." oninput="searchDeps(this.value)" onkeydown="comboNav(event, 'dep-suggestions', showDeps)" autocomplete="off">
       </div>
-      <div id="dep-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
+      <div id="dep-suggestions" role="listbox" aria-label="Course suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
       <div id="dep-result" style="padding: 1.5rem;">
         <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;">Search any course for its full profile &mdash; credits, 20-year offering history, usual times, instructors &mdash; plus its prerequisite roadmap, corequisites, and what it unlocks. Try:</p>
         <div style="display:flex; flex-wrap:wrap; gap:0.5rem;">
@@ -3244,24 +3270,24 @@ footer p {{ margin-top: 0.3rem; }}
     </div>
   </div>
 
-  <div id="tab-inst-explorer" class="tab-content">
+  <div id="tab-inst-explorer" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-inst-explorer" tabindex="0">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="inst-search" placeholder="Type an instructor name..." oninput="searchInst(this.value)" autocomplete="off">
+        <input type="text" id="inst-search" aria-label="Search for an instructor" role="combobox" aria-expanded="false" aria-controls="inst-suggestions" aria-autocomplete="list" aria-haspopup="listbox" placeholder="Type an instructor name..." oninput="searchInst(this.value)" onkeydown="comboNav(event, 'inst-suggestions', showInst)" autocomplete="off">
       </div>
-      <div id="inst-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
+      <div id="inst-suggestions" role="listbox" aria-label="Instructor suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
       <div id="inst-result" style="padding: 1.5rem;">
         <p style="color: var(--text-muted); font-size: 0.9rem;">Search any instructor for their complete teaching history: courses taught (click any to open it in the Course Explorer), subjects, tenure, and career span at AUS.</p>
       </div>
     </div>
   </div>
 
-  <div id="tab-degree-explorer" class="tab-content">
+  <div id="tab-degree-explorer" class="tab-content" role="tabpanel" aria-labelledby="tabbtn-degree-explorer" tabindex="0">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="degree-search" placeholder="Pick or type a degree program &mdash; e.g. Economics Major, FIN Minor..." oninput="searchProgram(this.value)" onfocus="searchProgram(this.value)" onblur="hideSoon('degree-suggestions')" autocomplete="off">
+        <input type="text" id="degree-search" aria-label="Search for a degree program" role="combobox" aria-expanded="false" aria-controls="degree-suggestions" aria-autocomplete="list" aria-haspopup="listbox" placeholder="Pick or type a degree program &mdash; e.g. Economics Major, FIN Minor..." oninput="searchProgram(this.value)" onfocus="searchProgram(this.value)" onblur="hideSoon('degree-suggestions')" onkeydown="comboNav(event, 'degree-suggestions', pickProgram)" autocomplete="off">
       </div>
-      <div id="degree-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 260px; overflow-y: auto;"></div>
+      <div id="degree-suggestions" role="listbox" aria-label="Degree program suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 260px; overflow-y: auto;"></div>
       <div id="degree-result" style="padding: 1.5rem;">
         <p style="color: var(--text-muted); font-size: 0.9rem;">Pick a major or minor to see the courses the catalog tags as counting toward it &mdash; its elective options and requirement-area courses &mdash; with one-click jump to each course's full profile.</p>
       </div>
@@ -3269,7 +3295,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
 </section>
 
-</div>
+</main>
 
 <!-- Footer -->
 <footer>
@@ -3457,8 +3483,12 @@ function sortTable(type, col) {{
 }}
 
 function switchTab(tab) {{
-  document.querySelectorAll('.tab').forEach(t =>
-    t.classList.toggle('active', (t.getAttribute('onclick') || '').includes("'" + tab + "'")));
+  document.querySelectorAll('.tab').forEach(t => {{
+    const on = t.getAttribute('aria-controls') === 'tab-' + tab;
+    t.classList.toggle('active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    t.tabIndex = on ? 0 : -1;            // roving tabindex for the tablist
+  }});
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
   const el = document.getElementById('tab-' + tab);
   if (el) el.classList.add('active');
@@ -3514,16 +3544,40 @@ function statBox(v, label) {{
   return `<div><div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text); line-height: 1;">${{v}}</div><div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.3rem;">${{label}}</div></div>`;
 }}
 
+// Shared keyboard support for the autocomplete comboboxes: ArrowUp/Down move
+// the active suggestion (tracked via aria-selected + aria-activedescendant),
+// Enter chooses it, Escape closes the list. Typing keys fall through.
+function comboNav(e, boxId, selectFn) {{
+  const box = document.getElementById(boxId);
+  if (!box || box.style.display === 'none') return;
+  const opts = [...box.querySelectorAll('[role="option"]')];
+  if (!opts.length) return;
+  const input = e.currentTarget;
+  const idx = opts.findIndex(o => o.getAttribute('aria-selected') === 'true');
+  const setActive = (i) => {{
+    opts.forEach((o, j) => o.setAttribute('aria-selected', j === i ? 'true' : 'false'));
+    if (i >= 0) {{ opts[i].scrollIntoView({{ block: 'nearest' }}); input.setAttribute('aria-activedescendant', opts[i].id); }}
+    else input.removeAttribute('aria-activedescendant');
+  }};
+  if (e.key === 'ArrowDown') {{ e.preventDefault(); setActive(idx < opts.length - 1 ? idx + 1 : 0); }}
+  else if (e.key === 'ArrowUp') {{ e.preventDefault(); setActive(idx > 0 ? idx - 1 : opts.length - 1); }}
+  else if (e.key === 'Enter' && idx >= 0) {{ e.preventDefault(); input.setAttribute('aria-expanded', 'false'); selectFn(opts[idx].getAttribute('data-val')); }}
+  else if (e.key === 'Escape') {{ box.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); input.removeAttribute('aria-activedescendant'); }}
+}}
+
 function searchDeps(query) {{
   const q = query.toUpperCase().trim();
   const sugBox = document.getElementById('dep-suggestions');
-  if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
+  const input = document.getElementById('dep-search');
+  if (q.length < 2) {{ sugBox.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); return; }}
   const matches = Object.keys(courseProfiles).filter(k => k.includes(q)).sort().slice(0, 14);
-  if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
+  if (matches.length === 0) {{ sugBox.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); return; }}
   sugBox.style.display = 'block';
-  sugBox.innerHTML = matches.map(m =>
-    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
-          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+  input.setAttribute('aria-expanded', 'true');
+  input.removeAttribute('aria-activedescendant');
+  sugBox.innerHTML = matches.map((m, i) =>
+    `<div class="sugg-opt" role="option" id="dep-suggestions-opt-${{i}}" data-val="${{m}}" aria-selected="false"
+          style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
           onclick="showDeps('${{m}}')"><span style="font-family: var(--font-mono); font-weight: 500;">${{m}}</span> <span style="color: var(--text-muted);">${{courseName(m)}}</span></div>`).join('');
 }}
 
@@ -3554,6 +3608,7 @@ function renderReqTree(node, visited, depth) {{
 function showDeps(course) {{
   activeView = ['course', course];
   document.getElementById('dep-suggestions').style.display = 'none';
+  document.getElementById('dep-search').setAttribute('aria-expanded', 'false');
   document.getElementById('dep-search').value = course;
   const result = document.getElementById('dep-result');
   const p = courseProfiles[course];
@@ -3622,19 +3677,23 @@ function showDeps(course) {{
 function searchInst(query) {{
   const q = query.toLowerCase().trim();
   const sugBox = document.getElementById('inst-suggestions');
-  if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
+  const input = document.getElementById('inst-search');
+  if (q.length < 2) {{ sugBox.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); return; }}
   const matches = Object.keys(instData).filter(k => k.toLowerCase().includes(q)).sort().slice(0, 14);
-  if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
+  if (matches.length === 0) {{ sugBox.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); return; }}
   sugBox.style.display = 'block';
-  sugBox.innerHTML = matches.map(m =>
-    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
-          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+  input.setAttribute('aria-expanded', 'true');
+  input.removeAttribute('aria-activedescendant');
+  sugBox.innerHTML = matches.map((m, i) =>
+    `<div class="sugg-opt" role="option" id="inst-suggestions-opt-${{i}}" data-val="${{m.replace(/"/g, '&quot;')}}" aria-selected="false"
+          style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
           onclick="showInst('${{m.replace(/'/g, "\\\\'")}}')"><strong>${{m}}</strong></div>`).join('');
 }}
 
 function showInst(name) {{
   activeView = ['inst', name];
   document.getElementById('inst-suggestions').style.display = 'none';
+  document.getElementById('inst-search').setAttribute('aria-expanded', 'false');
   document.getElementById('inst-search').value = name;
   const data = instData[name];
   const result = document.getElementById('inst-result');
@@ -3674,18 +3733,22 @@ function hideSoon(id) {{ setTimeout(() => {{ const b = document.getElementById(i
 function searchProgram(query) {{
   const q = query.toLowerCase().trim();
   const box = document.getElementById('degree-suggestions');
+  const input = document.getElementById('degree-search');
   const keys = Object.keys(programMap).sort();
   const matches = (q ? keys.filter(k => k.toLowerCase().includes(q)) : keys).slice(0, 60);
-  if (!matches.length) {{ box.style.display = 'none'; return; }}
+  if (!matches.length) {{ box.style.display = 'none'; input.setAttribute('aria-expanded', 'false'); return; }}
   box.style.display = 'block';
-  box.innerHTML = matches.map(m =>
-    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
-          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+  input.setAttribute('aria-expanded', 'true');
+  input.removeAttribute('aria-activedescendant');
+  box.innerHTML = matches.map((m, i) =>
+    `<div class="sugg-opt" role="option" id="degree-suggestions-opt-${{i}}" data-val="${{m.replace(/"/g, '&quot;')}}" aria-selected="false"
+          style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
           onmousedown="pickProgram('${{m.replace(/'/g, "\\\\'")}}')">${{m}} <span style="color: var(--text-muted);">&middot; ${{programMap[m].length}} courses</span></div>`).join('');
 }}
 function pickProgram(name) {{
   document.getElementById('degree-search').value = name;
   document.getElementById('degree-suggestions').style.display = 'none';
+  document.getElementById('degree-search').setAttribute('aria-expanded', 'false');
   showProgram(name);
 }}
 
@@ -3748,18 +3811,38 @@ function wireScrollboxes(root) {{
 filterTable('courses');
 filterTable('catalog');
 
-// Active nav on scroll
+// Active nav on scroll — highlight the current section's link, keep it scrolled
+// into view within the horizontal nav, and expose it to assistive tech.
 const sections = document.querySelectorAll('section[id]');
 const navLinks = document.querySelectorAll('nav a[href^="#"]');
-window.addEventListener('scroll', () => {{
+let activeNavId = '';
+function syncActiveNav() {{
   let current = '';
-  sections.forEach(s => {{
-    if (window.scrollY >= s.offsetTop - 200) current = s.id;
-  }});
+  sections.forEach(s => {{ if (window.scrollY >= s.offsetTop - 200) current = s.id; }});
+  if (current === activeNavId) return;   // only react when the section changes
+  activeNavId = current;
+  let activeLink = null;
   navLinks.forEach(a => {{
-    a.classList.toggle('active', a.getAttribute('href') === '#' + current);
+    const on = a.getAttribute('href') === '#' + current;
+    a.classList.toggle('active', on);
+    if (on) {{ a.setAttribute('aria-current', 'true'); activeLink = a; }}
+    else a.removeAttribute('aria-current');
   }});
-}}, {{ passive: true }});
+  // Center the active link inside the scrollable nav (horizontal only, so the
+  // page's vertical scroll is untouched). Honors reduced-motion.
+  const inner = document.getElementById('nav-inner');
+  if (inner) {{
+    if (activeLink) {{
+      const ir = inner.getBoundingClientRect(), lr = activeLink.getBoundingClientRect();
+      const delta = (lr.left + lr.width / 2) - (ir.left + ir.width / 2);
+      if (Math.abs(delta) > 4) inner.scrollBy({{ left: delta, behavior: prefersReduced ? 'auto' : 'smooth' }});
+    }} else {{
+      inner.scrollTo({{ left: 0, behavior: prefersReduced ? 'auto' : 'smooth' }});  // back at the hero
+    }}
+  }}
+}}
+window.addEventListener('scroll', syncActiveNav, {{ passive: true }});
+syncActiveNav();
 
 // Nav horizontal-scroll affordance: fade the edge(s) that have more links.
 (function () {{
@@ -3774,6 +3857,28 @@ window.addEventListener('scroll', () => {{
   scroller.addEventListener('scroll', upd, {{ passive: true }});
   window.addEventListener('resize', upd, {{ passive: true }});
   upd();
+}})();
+
+// Keyboard support for the Browse tablist (WAI-ARIA pattern): arrow keys /
+// Home / End move focus and activate; Enter / Space activate.
+(function () {{
+  const tablist = document.querySelector('.tabs[role="tablist"]');
+  if (!tablist) return;
+  const tabs = [...tablist.querySelectorAll('[role="tab"]')];
+  tablist.addEventListener('keydown', (e) => {{
+    const i = tabs.indexOf(document.activeElement);
+    if (i < 0) return;
+    let n = -1;
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') n = (i + 1) % tabs.length;
+    else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') n = (i - 1 + tabs.length) % tabs.length;
+    else if (e.key === 'Home') n = 0;
+    else if (e.key === 'End') n = tabs.length - 1;
+    else if (e.key === 'Enter' || e.key === ' ') {{ e.preventDefault(); tabs[i].click(); return; }}
+    else return;
+    e.preventDefault();
+    tabs[n].focus();
+    tabs[n].click();
+  }});
 }})();
 
 // Lazy chart rendering: only draw a chart when it scrolls near the viewport,
