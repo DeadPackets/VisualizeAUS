@@ -35,10 +35,23 @@ AUS_GOLD = "#C4972F"
 # Helpers
 # ---------------------------------------------------------------------------
 
+chart_specs = {}  # chart_id -> {data, layout}; embedded once for lazy rendering
+
+
 def chart_html(fig, chart_id):
-    """Return a Plotly figure as an embeddable HTML div."""
-    return pio.to_html(fig, full_html=False, include_plotlyjs=False,
-                       div_id=f"chart-{chart_id}", config={"responsive": True})
+    """Register a figure for lazy rendering and return a sized placeholder div.
+
+    Charts are no longer rendered eagerly on load (62 simultaneous Plotly
+    layouts is punishing on phones). Each figure's spec is stored in
+    ``chart_specs`` — embedded once as a single JSON blob — and an
+    IntersectionObserver calls ``Plotly.newPlot`` only when the placeholder
+    scrolls near the viewport. The placeholder reserves the chart's height so
+    deferring the render causes no layout shift.
+    """
+    chart_specs[chart_id] = json.loads(pio.to_json(fig))
+    height = fig.layout.height or 450
+    return (f'<div id="chart-{chart_id}" class="lazy-chart" data-cid="{chart_id}" '
+            f'style="min-height:{height}px;"></div>')
 
 
 def parse_time_minutes(t):
@@ -1728,6 +1741,127 @@ df_cat_browse = pd.read_sql_query("""
 """, conn2)
 catalog_json = df_cat_browse.to_json(orient="records")
 
+# Latest title per course code — so the dependency explorer can show names.
+df_titles = pd.read_sql_query("""
+    SELECT subject || ' ' || course_number AS code, title, MAX(term_id)
+    FROM courses WHERE title != ''
+    GROUP BY subject, course_number
+""", conn2)
+course_titles = dict(zip(df_titles['code'], df_titles['title']))
+course_titles_json = json.dumps(course_titles)
+
+# ---- Course profiles (title, credits, offering history, instructors) -------
+sem_name_map = {str(k): v for k, v in
+                pd.read_sql_query("SELECT term_id, term_name FROM semesters", conn2).itertuples(index=False)}
+prof = pd.read_sql_query(
+    "SELECT subject||' '||course_number AS code, crn, term_id, credits, days, start_time FROM courses", conn2)
+prof['term_id'] = prof['term_id'].astype(str)
+prof['year'] = prof['term_id'].str[:4].astype(int)
+
+def _top_per_course(df, key):
+    """Most common non-empty value of `key` per course code."""
+    s = df[df[key].notna() & (df[key].astype(str) != '')]
+    if s.empty:
+        return {}
+    return (s.groupby(['code', key]).size().reset_index(name='n')
+              .sort_values('n').drop_duplicates('code', keep='last')
+              .set_index('code')[key].to_dict())
+
+day_top = _top_per_course(prof, 'days')
+time_top = _top_per_course(prof[prof['start_time'] != '12:00 am'], 'start_time')
+cred_top = _top_per_course(prof, 'credits')
+agg = prof.groupby('code').agg(nt=('term_id', 'nunique'),
+                               first_tid=('term_id', 'min'), last_tid=('term_id', 'max'))
+nsec = prof.drop_duplicates(['code', 'crn', 'term_id']).groupby('code').size()
+yrs = prof.groupby('code')['year'].apply(lambda s: sorted(set(s.tolist())))
+
+course_profiles = {}
+for code, row in agg.iterrows():
+    cr = cred_top.get(code)
+    course_profiles[code] = {
+        't': course_titles.get(code, ''),
+        'cr': (float(cr) if cr is not None and not pd.isna(cr) else None),
+        'ns': int(nsec.get(code, 0)), 'nt': int(row['nt']),
+        'ft': sem_name_map.get(str(row['first_tid']), ''),
+        'lt': sem_name_map.get(str(row['last_tid']), ''),
+        'yrs': yrs.get(code, []), 'dy': day_top.get(code, ''), 'tm': time_top.get(code, ''),
+    }
+
+inst_pc = pd.read_sql_query("""
+    SELECT subj.code AS code, si.name AS name, COUNT(*) AS c
+    FROM section_instructors si
+    JOIN (SELECT DISTINCT crn, term_id, subject||' '||course_number AS code FROM courses) subj
+      ON subj.crn = si.crn AND subj.term_id = si.term_id
+    WHERE si.name != '' AND si.name != 'TBA'
+    GROUP BY subj.code, si.name
+""", conn2)
+ninst = inst_pc.groupby('code')['name'].nunique().to_dict()
+for code, g in inst_pc.sort_values('c').groupby('code'):
+    if code in course_profiles:
+        top = g.tail(8).iloc[::-1]
+        course_profiles[code]['ins'] = [[n, int(cc)] for n, cc in zip(top['name'], top['c'])]
+        course_profiles[code]['ni'] = int(ninst.get(code, 0))
+
+# Sections offered per academic year, per course (for the offering bar chart)
+sec_year = (prof.drop_duplicates(['code', 'crn', 'term_id'])
+            .groupby(['code', 'year']).size().reset_index(name='n'))
+for code, g in sec_year.groupby('code'):
+    if code in course_profiles:
+        course_profiles[code]['yc'] = [[int(y), int(n)] for y, n in zip(g['year'], g['n'])]
+course_profiles_json = json.dumps(course_profiles)
+
+# ---- Latest prerequisite logic tree per course (Requirement roadmap) -------
+pt = pd.read_sql_query("""
+    SELECT c.code AS code, sd.prerequisites_json AS pj, sd.term_id AS term_id
+    FROM section_details sd
+    JOIN (SELECT DISTINCT crn, term_id, subject||' '||course_number AS code FROM courses) c
+      ON c.crn = sd.crn AND c.term_id = sd.term_id
+    WHERE sd.prerequisites_json NOT IN ('', '[]', 'null') AND sd.prerequisites_json IS NOT NULL
+""", conn2)
+pt['term_id'] = pt['term_id'].astype(str)
+pt = pt.sort_values('term_id').drop_duplicates('code', keep='last')
+
+def _compact_tree(n):
+    """Slim a prereq tree for the client: short keys, drop the always-present
+    'Undergraduate' level, omit default min_grade/concurrent."""
+    if n.get("type") == "course":
+        c = {"c": f"{n.get('subject', '')} {n.get('course_number', '')}".strip()}
+        if n.get("min_grade"):
+            c["g"] = n["min_grade"]
+        if n.get("concurrent"):
+            c["k"] = 1
+        return c
+    return {"o": n.get("type"), "x": [_compact_tree(x) for x in n.get("operands", [])]}
+
+prereq_trees = {}
+for r in pt.itertuples():
+    tree = analysis.load_tree(r.pj)
+    if tree:
+        prereq_trees[r.code] = _compact_tree(tree)
+prereq_trees_json = json.dumps(prereq_trees)
+
+# ---- Degree-program -> courses map (Degree Explorer) -----------------------
+prog_rows = pd.read_sql_query(
+    "SELECT subject||' '||course_number AS code, course_attributes FROM catalog_detail WHERE course_attributes != ''", conn2)
+program_courses = {}
+for r in prog_rows.itertuples():
+    for tag in analysis.parse_attribute_tags(r.course_attributes):
+        program_courses.setdefault(analysis.attribute_program(tag), {}).setdefault(r.code, analysis.attribute_role(tag))
+program_map = {p: sorted([c, role] for c, role in courses.items())
+               for p, courses in program_courses.items() if len(courses) >= 3}
+program_map_json = json.dumps(program_map)
+
+# Reverse map: which programs each course counts toward (for the Course Explorer)
+course_to_programs = {}
+for prog, courses in program_courses.items():
+    if len(courses) < 3:
+        continue
+    for code in courses:
+        course_to_programs.setdefault(code, []).append(prog)
+# Store [total_count, up-to-15 program names] so broad free-electives stay compact.
+course_to_programs = {code: [len(progs), sorted(progs)[:15]] for code, progs in course_to_programs.items()}
+course_to_programs_json = json.dumps(course_to_programs)
+
 # Build compact dependency data for Course Dependency Explorer
 dep_data = {}
 for node in G.nodes():
@@ -1748,23 +1882,31 @@ dep_explorer_json = json.dumps(dep_data)
 
 # Build instructor data for Instructor Career Explorer
 df_inst_detail = pd.read_sql_query("""
-    SELECT c.instructor_name, c.subject, c.course_number, c.title, s.term_name, s.term_id
+    SELECT c.instructor_name, c.crn, c.subject, c.course_number, c.title, s.term_name, s.term_id
     FROM courses c JOIN semesters s ON c.term_id = s.term_id
     WHERE c.instructor_name != '' AND c.instructor_name != 'TBA'
     ORDER BY s.term_id
 """, conn2)
+df_inst_detail['term_id'] = df_inst_detail['term_id'].astype(str)
+df_inst_detail['year'] = df_inst_detail['term_id'].str[:4].astype(int)
 
 inst_data = {}
 for name, group in df_inst_detail.groupby('instructor_name'):
-    top_courses = group.groupby(['subject', 'course_number']).agg(
-        title=('title', 'first'), times=('term_id', 'count')).reset_index().nlargest(10, 'times')
+    secs = group.drop_duplicates(['crn', 'term_id'])
+    top_courses = (secs.groupby(['subject', 'course_number'])
+                   .agg(title=('title', 'first'), times=('term_id', 'nunique'))
+                   .reset_index().nlargest(10, 'times'))
+    yr_counts = secs.groupby('year').size()
+    subj_counts = secs.groupby('subject').size().sort_values(ascending=False)
     inst_data[name] = {
-        't': int(len(group)),
+        't': int(len(secs)),
         's': sorted(group['subject'].unique().tolist()),
         'n': int(group['term_id'].nunique()),
         'f': group['term_name'].iloc[0],
         'l': group['term_name'].iloc[-1],
-        'c': [[r['subject'], r['course_number'], r['title'], int(r['times'])] for _, r in top_courses.iterrows()]
+        'c': [[r['subject'], r['course_number'], r['title'], int(r['times'])] for _, r in top_courses.iterrows()],
+        'a': [[int(y), int(n)] for y, n in yr_counts.items()],
+        'sm': [[s, int(n)] for s, n in subj_counts.head(8).items()],
     }
 inst_explorer_json = json.dumps(inst_data)
 
@@ -1774,6 +1916,10 @@ conn2.close()
 # HTML Template
 # ---------------------------------------------------------------------------
 
+# One JSON blob holding every chart spec, rendered lazily on the client.
+# Escape "</" so the payload can't prematurely close its <script> tag.
+chart_specs_json = json.dumps(chart_specs, separators=(",", ":")).replace("</", "<\\/")
+
 html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1781,7 +1927,19 @@ html = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VisualizeAUS — 20 Years of AUS Course Data</title>
 <meta name="description" content="Interactive visualizations of 20 years of course data from the American University of Sharjah.">
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+<script>
+// Apply the saved/system theme before first paint to avoid a flash.
+(function () {{
+  try {{
+    var saved = localStorage.getItem('viz-theme');
+    var dark = saved ? saved === 'dark'
+      : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    if (dark) document.documentElement.setAttribute('data-theme', 'dark');
+  }} catch (e) {{}}
+}})();
+</script>
+<link rel="preconnect" href="https://cdn.plot.ly">
+<script defer src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Raleway:wght@400;500;600;700;800&family=Montserrat:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -1789,10 +1947,12 @@ html = f"""<!DOCTYPE html>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 :root {{
+  color-scheme: light;
   --bg: #faf7f2;
   --bg-warm: #f3ede3;
   --bg-card: #ffffff;
   --bg-hero: #010508;
+  --nav-bg: rgba(250, 247, 242, 0.9);
   --border: #e2ddd4;
   --border-light: #ece8e0;
   --accent: #9e3223;
@@ -1805,12 +1965,49 @@ html = f"""<!DOCTYPE html>
   --text-on-dark: #f0ece4;
   --cream: #e0d0af;
   --cream-light: #f0e8d4;
+  /* semantic pill tints (prereq / coreq / unlocks / degree program) */
+  --pre-bg: #fdf5f4;  --pre-border: #f0dbd8;
+  --co-bg: #f5ecfb;   --co-border: #ddc6ec;
+  --next-bg: #e9f6ea; --next-border: #aad8ac;
+  --prog-bg: #fbf3e1; --prog-border: #e7d6ab;
+  /* chart surface — charts re-theme to match (transparent bg inherits this) */
+  --chart-surface: #ffffff;
+  --shadow-sm: 0 1px 2px rgba(40, 30, 20, 0.04), 0 2px 6px rgba(40, 30, 20, 0.05);
+  --shadow-md: 0 1px 2px rgba(40, 30, 20, 0.05), 0 6px 18px rgba(40, 30, 20, 0.08);
   --radius: 12px;
   --radius-sm: 8px;
   --font-display: 'Raleway', sans-serif;
   --font-body: 'Montserrat', sans-serif;
   --font-mono: 'JetBrains Mono', monospace;
   --max-width: 1100px;
+}}
+
+:root[data-theme="dark"] {{
+  color-scheme: dark;
+  --bg: #15110d;
+  --bg-warm: #1e1a15;
+  --bg-card: #211c17;
+  --bg-hero: #0a0806;
+  --nav-bg: rgba(21, 17, 13, 0.88);
+  --border: #38322b;
+  --border-light: #2b2620;
+  --accent: #e3765f;
+  --accent-light: #ee8b74;
+  --accent-bg: #2e1e1a;
+  --text: #efe9df;
+  --text-secondary: #c8c0b2;
+  --text-muted: #918879;
+  --text-light: #6e675c;
+  --text-on-dark: #f0ece4;
+  --cream: #e0d0af;
+  --cream-light: #3b3322;
+  --pre-bg: #2e1e1a;  --pre-border: #4d3029;
+  --co-bg: #251d2d;   --co-border: #443454;
+  --next-bg: #16261b; --next-border: #2e4b34;
+  --prog-bg: #2b2415; --prog-border: #4c4027;
+  --chart-surface: #1d1812;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 6px rgba(0, 0, 0, 0.4), 0 8px 22px rgba(0, 0, 0, 0.5);
 }}
 
 html {{ scroll-behavior: smooth; }}
@@ -1822,9 +2019,35 @@ body {{
   line-height: 1.7;
   font-size: 16px;
   font-weight: 400;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }}
+
+/* Respect reduced-motion: drop transitions/animations for users who ask. */
+@media (prefers-reduced-motion: reduce) {{
+  *, *::before, *::after {{
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }}
+}}
+
+/* Keyboard focus visibility (never remove focus rings). */
+a:focus-visible, button:focus-visible, input:focus-visible,
+select:focus-visible, .tab:focus-visible, .cx-chip:focus-visible,
+.example-chip:focus-visible, [tabindex]:focus-visible {{
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}}
+
+/* Cleaner line breaks: balance short headings, avoid orphans in body copy. */
+h1, h2, h3, .section-header h2 {{ text-wrap: balance; }}
+.section-header p, .explanation, .insight, .hero .subtitle {{ text-wrap: pretty; }}
 
 /* ===================== HERO ===================== */
 .hero {{
@@ -1911,24 +2134,65 @@ nav {{
   position: sticky;
   top: 0;
   z-index: 100;
-  background: rgba(250, 247, 242, 0.92);
+  background: var(--nav-bg);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
+  transition: background-color 0.3s ease, border-color 0.3s ease;
 }}
 
-nav .nav-inner {{
+nav .nav-bar {{
   max-width: var(--max-width);
   margin: 0 auto;
   display: flex;
   align-items: center;
-  gap: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
+  gap: 0.5rem;
   padding: 0 2rem;
 }}
 
+nav .nav-scroll {{
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}}
+
+nav .nav-inner {{
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-behavior: smooth;
+}}
+
 nav .nav-inner::-webkit-scrollbar {{ display: none; }}
+
+/* edge fades + chevrons signalling the nav can scroll horizontally */
+nav .nav-edge {{
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 36px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  z-index: 2;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 1.1rem;
+}}
+nav .nav-edge.left {{ left: 0; justify-content: flex-start; padding-left: 3px; background: linear-gradient(to right, var(--nav-bg) 45%, rgba(0, 0, 0, 0)); }}
+nav .nav-edge.right {{ right: 0; justify-content: flex-end; padding-right: 3px; background: linear-gradient(to left, var(--nav-bg) 45%, rgba(0, 0, 0, 0)); }}
+nav .nav-edge.left::after {{ content: '\\2039'; }}
+nav .nav-edge.right::after {{ content: '\\203A'; }}
+nav .nav-scroll.more-left .nav-edge.left {{ opacity: 1; }}
+nav .nav-scroll.more-right .nav-edge.right {{ opacity: 1; }}
 
 nav a {{
   color: var(--text-muted);
@@ -1936,7 +2200,7 @@ nav a {{
   font-size: 0.82rem;
   font-weight: 500;
   white-space: nowrap;
-  transition: color 0.2s;
+  transition: color 0.2s ease;
   padding: 0.9rem 1rem;
   border-bottom: 2px solid transparent;
 }}
@@ -1953,6 +2217,27 @@ nav .nav-brand {{
   margin-right: 0.5rem;
   border-right: 1px solid var(--border);
 }}
+
+.theme-toggle {{
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease, transform 0.1s ease;
+}}
+.theme-toggle:hover {{ color: var(--accent); border-color: var(--accent); }}
+.theme-toggle:active {{ transform: scale(0.92); }}
+.theme-toggle svg {{ width: 18px; height: 18px; display: block; }}
+.theme-toggle .moon {{ display: none; }}
+:root[data-theme="dark"] .theme-toggle .sun {{ display: none; }}
+:root[data-theme="dark"] .theme-toggle .moon {{ display: block; }}
 
 /* ===================== SECTIONS ===================== */
 .container {{
@@ -2002,11 +2287,13 @@ section + section {{
 
 /* ===================== CHARTS ===================== */
 .chart-container {{
-  background: var(--bg-card);
+  background: var(--chart-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 1.25rem;
   margin-bottom: 1.5rem;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }}
 
 .chart-row {{
@@ -2018,7 +2305,7 @@ section + section {{
 /* ===================== EXPLANATIONS ===================== */
 .explanation {{
   background: var(--accent-bg);
-  border: 1px solid #f0dbd8;
+  border: 1px solid var(--pre-border);
   border-left: 3px solid var(--accent);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   padding: 1rem 1.25rem;
@@ -2231,6 +2518,105 @@ tbody td {{
 .tab-content {{ display: none; }}
 .tab-content.active {{ display: block; }}
 
+/* ===================== EXPLORER ===================== */
+.example-chip {{
+  background: var(--bg-warm);
+  border: 1px solid var(--border);
+  padding: 0.3rem 0.8rem;
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  color: var(--accent);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}}
+.example-chip:hover {{ background: var(--accent-bg); border-color: var(--accent); }}
+
+.cx-section {{ margin-bottom: 1.5rem; }}
+.cx-label {{
+  font-family: var(--font-mono); font-size: 0.74rem; text-transform: uppercase;
+  letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.6rem;
+}}
+.cx-chip {{
+  display: inline-block; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm);
+  font-size: 0.82rem; cursor: pointer; border: 1px solid var(--border); background: var(--bg-warm);
+  transition: border-color 0.15s ease, transform 0.1s ease, box-shadow 0.15s ease;
+}}
+.cx-chip .mono {{ font-family: var(--font-mono); font-weight: 500; }}
+.cx-chip .nm {{ color: var(--text-muted); }}
+/* semantic pill tints — prereq / coreq / unlocks / degree program */
+.cx-chip.pre, .cx-leaf.pre {{ background: var(--pre-bg); border-color: var(--pre-border); }}
+.cx-chip.co {{ background: var(--co-bg); border-color: var(--co-border); }}
+.cx-chip.next {{ background: var(--next-bg); border-color: var(--next-border); }}
+.cx-chip.prog {{ background: var(--prog-bg); border-color: var(--prog-border); }}
+.cx-chips {{ display: flex; flex-wrap: wrap; gap: 0.5rem; }}
+/* honest framing caption for the degree explorer */
+.cx-note {{
+  font-size: 0.82rem; color: var(--text-secondary); background: var(--bg-warm);
+  border-left: 3px solid var(--accent); padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-sm); margin-bottom: 1.4rem; line-height: 1.55;
+  text-wrap: pretty;
+}}
+/* scrollable chip pool with a bottom fade + hint that signals "more below" */
+.cx-scrollbox {{ position: relative; }}
+.cx-scrollbox .cx-chips.scrolly {{
+  max-height: 320px; overflow-y: auto; padding: 0.1rem 0.1rem 0.5rem;
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}}
+.cx-scrollbox .cx-fade {{
+  position: absolute; left: 0; right: 0; bottom: 0; height: 42px;
+  background: linear-gradient(to top, var(--bg-card), rgba(0, 0, 0, 0));
+  pointer-events: none; opacity: 0; transition: opacity 0.2s ease;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+}}
+.cx-scrollbox .cx-more-hint {{
+  position: absolute; right: 10px; bottom: 7px; font-family: var(--font-mono);
+  font-size: 0.66rem; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-muted); pointer-events: none; opacity: 0;
+  transition: opacity 0.2s ease;
+}}
+.cx-scrollbox.more .cx-fade, .cx-scrollbox.more .cx-more-hint {{ opacity: 1; }}
+/* offering timeline strip */
+.cx-strip {{ display: flex; gap: 2px; margin: 0.4rem 0 0.2rem; }}
+.cx-strip .cell {{ width: 9px; height: 22px; border-radius: 2px; background: var(--border-light); }}
+.cx-strip .cell.on {{ background: var(--accent); }}
+/* AND/OR requirement tree */
+.cx-tree {{ font-size: 0.85rem; }}
+.cx-node {{ margin: 0.2rem 0; }}
+.cx-op {{
+  display: inline-block; font-family: var(--font-mono); font-size: 0.66rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 0.06em; padding: 0.1rem 0.45rem; border-radius: 4px;
+  color: #fff; vertical-align: middle;
+}}
+.cx-op.and {{ background: #2471a3; }}
+.cx-op.or {{ background: #1f8a4c; }}
+.cx-kids {{ margin-left: 0.9rem; padding-left: 0.9rem; border-left: 2px solid var(--border); }}
+.cx-leaf {{
+  display: inline-block; margin: 0.15rem 0; padding: 0.2rem 0.6rem; border-radius: var(--radius-sm);
+  font-size: 0.82rem; cursor: pointer; background: var(--pre-bg); border: 1px solid var(--pre-border);
+  transition: border-color 0.15s ease, transform 0.1s ease;
+}}
+.cx-leaf .mono {{ font-family: var(--font-mono); font-weight: 500; }}
+.cx-leaf .nm {{ color: var(--text-muted); }}
+.cx-leaf:hover, .cx-chip:hover {{ border-color: var(--accent); }}
+.cx-chip:active, .cx-leaf:active, .example-chip:active {{ transform: scale(0.96); }}
+.cx-leaf .exp {{ color: var(--accent); font-weight: 700; margin-left: 0.3rem; }}
+
+/* live table-summary mini bars (cheap, redraw on every keystroke) */
+.mini-summary {{
+  background: var(--bg-card); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 0.9rem 1.1rem; margin-bottom: 1rem;
+}}
+.mini-bars {{ font-size: 0.8rem; }}
+.mb-row {{ display: flex; align-items: center; gap: 0.6rem; margin: 0.2rem 0; }}
+.mb-label {{
+  width: 80px; flex-shrink: 0; text-align: right; font-family: var(--font-mono);
+  color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}}
+.mb-track {{ flex: 1; background: var(--border-light); border-radius: 3px; height: 14px; overflow: hidden; }}
+.mb-fill {{ display: block; height: 100%; border-radius: 3px; transition: width 0.35s ease; }}
+.mb-val {{ width: 46px; flex-shrink: 0; font-family: var(--font-mono); color: var(--text-muted); }}
+
 /* ===================== FOOTER ===================== */
 footer {{
   text-align: center;
@@ -2363,23 +2749,33 @@ footer p {{ margin-top: 0.3rem; }}
 
 <!-- Navigation -->
 <nav>
-  <div class="nav-inner">
-    <a href="#" class="nav-brand">VisualizeAUS</a>
-    <a href="#growth">Growth</a>
-    <a href="#subjects">Subjects</a>
-    <a href="#levels">Levels</a>
-    <a href="#instructors">Instructors</a>
-    <a href="#team-teaching">Team Teaching</a>
-    <a href="#modality">Modality</a>
-    <a href="#covid">COVID</a>
-    <a href="#schedule">Schedule</a>
-    <a href="#curriculum">Curriculum</a>
-    <a href="#prerequisites">Prerequisites</a>
-    <a href="#grades">Grades</a>
-    <a href="#attributes">Attributes</a>
-    <a href="#catalog">Catalog</a>
-    <a href="#enrollment">Enrollment</a>
-    <a href="#browse">Browse</a>
+  <div class="nav-bar">
+    <div class="nav-scroll" id="nav-scroll">
+      <div class="nav-inner" id="nav-inner">
+      <a href="#" class="nav-brand">VisualizeAUS</a>
+      <a href="#growth">Growth</a>
+      <a href="#subjects">Subjects</a>
+      <a href="#levels">Levels</a>
+      <a href="#instructors">Instructors</a>
+      <a href="#team-teaching">Team Teaching</a>
+      <a href="#modality">Modality</a>
+      <a href="#covid">COVID</a>
+      <a href="#schedule">Schedule</a>
+      <a href="#curriculum">Curriculum</a>
+      <a href="#prerequisites">Prerequisites</a>
+      <a href="#grades">Grades</a>
+      <a href="#attributes">Attributes</a>
+      <a href="#catalog">Catalog</a>
+      <a href="#enrollment">Enrollment</a>
+      <a href="#browse">Browse</a>
+      </div>
+      <span class="nav-edge left" aria-hidden="true"></span>
+      <span class="nav-edge right" aria-hidden="true"></span>
+    </div>
+    <button class="theme-toggle" onclick="toggleTheme()" aria-label="Toggle dark mode" title="Toggle dark mode">
+      <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"></path></svg>
+      <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+    </button>
   </div>
 </nav>
 
@@ -2762,21 +3158,24 @@ footer p {{ margin-top: 0.3rem; }}
   <div class="section-header">
     <div class="section-num">14 &mdash; Browse &amp; Explore</div>
     <h2>Explore the Dataset</h2>
-    <p>Search courses, look up instructors, and explore prerequisite chains interactively.</p>
+    <p>Search any course for its full profile and prerequisite roadmap, look up instructors, browse degree programs, or scan the raw tables &mdash; everything is cross-linked, so one click jumps to the next.</p>
   </div>
 
   <div class="tabs">
-    <div class="tab active" onclick="switchTab('courses')">Recent Courses</div>
-    <div class="tab" onclick="switchTab('catalog')">Course Catalog</div>
-    <div class="tab" onclick="switchTab('dep-explorer')">Dependency Explorer</div>
+    <div class="tab active" onclick="switchTab('course-explorer')">Course Explorer</div>
     <div class="tab" onclick="switchTab('inst-explorer')">Instructor Lookup</div>
+    <div class="tab" onclick="switchTab('degree-explorer')">Degree Explorer</div>
+    <div class="tab" onclick="switchTab('courses')">Recent Courses</div>
+    <div class="tab" onclick="switchTab('catalog')">Course Catalog</div>
   </div>
 
-  <div id="tab-courses" class="tab-content active">
+  <div id="tab-courses" class="tab-content">
+    <p style="color: var(--text-muted); font-size: 0.85rem; margin-bottom: 0.75rem;">The 5,000 most recent sections. Use the Course Explorer above for full course histories.</p>
+    <div class="mini-summary"><div class="cx-label">Top subjects in this view &mdash; updates as you search/filter</div><div id="courses-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="course-search" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
-        <select id="course-semester" onchange="filterTable('courses')">
+        <input type="text" id="courses-search" placeholder="Search courses &mdash; try COE, Calculus, or an instructor name..." oninput="filterTable('courses')">
+        <select id="courses-semester" onchange="filterTable('courses')">
           <option value="">All Semesters</option>
         </select>
       </div>
@@ -2802,6 +3201,7 @@ footer p {{ margin-top: 0.3rem; }}
   </div>
 
   <div id="tab-catalog" class="tab-content">
+    <div class="mini-summary"><div class="cx-label">Credit hours in this view &mdash; updates as you search</div><div id="catalog-summary" class="mini-bars"></div></div>
     <div class="table-wrapper">
       <div class="table-controls">
         <input type="text" id="catalog-search" placeholder="Search catalog &mdash; try a subject, keyword, or department..." oninput="filterTable('catalog')">
@@ -2826,14 +3226,20 @@ footer p {{ margin-top: 0.3rem; }}
     </div>
   </div>
 
-  <div id="tab-dep-explorer" class="tab-content">
+  <div id="tab-course-explorer" class="tab-content active">
     <div class="table-wrapper">
       <div class="table-controls">
-        <input type="text" id="dep-search" placeholder="Type a course code (e.g., COE 221, MTH 104, PHY 101)..." oninput="searchDeps(this.value)" autocomplete="off">
+        <input type="text" id="dep-search" placeholder="Type a course code &mdash; e.g. COE 420, MTH 104, PHY 101..." oninput="searchDeps(this.value)" autocomplete="off">
       </div>
-      <div id="dep-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 200px; overflow-y: auto;"></div>
+      <div id="dep-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
       <div id="dep-result" style="padding: 1.5rem;">
-        <p style="color: var(--text-muted); font-size: 0.9rem;">Search for any course to see its complete dependency tree: prerequisites (with minimum grades), corequisites, and which courses need it as a prerequisite.</p>
+        <p style="color: var(--text-muted); font-size: 0.9rem; margin-bottom: 0.75rem;">Search any course for its full profile &mdash; credits, 20-year offering history, usual times, instructors &mdash; plus its prerequisite roadmap, corequisites, and what it unlocks. Try:</p>
+        <div style="display:flex; flex-wrap:wrap; gap:0.5rem;">
+          <span class="example-chip" onclick="showDeps('COE 420')">COE 420</span>
+          <span class="example-chip" onclick="showDeps('MTH 104')">MTH 104</span>
+          <span class="example-chip" onclick="showDeps('CMP 305')">CMP 305</span>
+          <span class="example-chip" onclick="showDeps('FIN 201')">FIN 201</span>
+        </div>
       </div>
     </div>
   </div>
@@ -2843,9 +3249,21 @@ footer p {{ margin-top: 0.3rem; }}
       <div class="table-controls">
         <input type="text" id="inst-search" placeholder="Type an instructor name..." oninput="searchInst(this.value)" autocomplete="off">
       </div>
-      <div id="inst-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 200px; overflow-y: auto;"></div>
+      <div id="inst-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 220px; overflow-y: auto;"></div>
       <div id="inst-result" style="padding: 1.5rem;">
-        <p style="color: var(--text-muted); font-size: 0.9rem;">Search for any instructor to see their complete teaching history: courses taught, subjects, tenure, and career timeline at AUS.</p>
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Search any instructor for their complete teaching history: courses taught (click any to open it in the Course Explorer), subjects, tenure, and career span at AUS.</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="tab-degree-explorer" class="tab-content">
+    <div class="table-wrapper">
+      <div class="table-controls">
+        <input type="text" id="degree-search" placeholder="Pick or type a degree program &mdash; e.g. Economics Major, FIN Minor..." oninput="searchProgram(this.value)" onfocus="searchProgram(this.value)" onblur="hideSoon('degree-suggestions')" autocomplete="off">
+      </div>
+      <div id="degree-suggestions" style="display:none; background: var(--bg-card); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 var(--radius-sm) var(--radius-sm); max-height: 260px; overflow-y: auto;"></div>
+      <div id="degree-result" style="padding: 1.5rem;">
+        <p style="color: var(--text-muted); font-size: 0.9rem;">Pick a major or minor to see the courses the catalog tags as counting toward it &mdash; its elective options and requirement-area courses &mdash; with one-click jump to each course's full profile.</p>
       </div>
     </div>
   </div>
@@ -2864,16 +3282,73 @@ footer p {{ margin-top: 0.3rem; }}
     &nbsp;&middot;&nbsp; Data scraped from AUS Banner &nbsp;&middot;&nbsp; MIT License
   </p>
 </footer>
+<script type="application/json" id="chart-data">{chart_specs_json}</script>
 <script>
 // ---- Data ----
 const courseData = {browse_json};
 const catalogData = {catalog_json};
 const depData = {dep_explorer_json};
 const instData = {inst_explorer_json};
+const courseTitles = {course_titles_json};
+const courseProfiles = {course_profiles_json};
+const prereqTrees = {prereq_trees_json};
+const programMap = {program_map_json};
+const courseToPrograms = {course_to_programs_json};
+function courseName(code) {{ return courseTitles[code] || ''; }}
+function codeWithName(code) {{
+  const t = courseName(code);
+  return t ? code + ' <span style="color: var(--text-muted); font-weight: 400;">' + t + '</span>' : code;
+}}
+
+// ---- Theme (dark mode) ----
+function isDark() {{ return document.documentElement.getAttribute('data-theme') === 'dark'; }}
+const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+let activeView = null;  // ['course'|'inst'|'program', id] — re-rendered on theme flip
+function toggleTheme() {{
+  const dark = !isDark();
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  try {{ localStorage.setItem('viz-theme', dark ? 'dark' : 'light'); }} catch (e) {{}}
+  themeAllCharts(dark);
+  if (activeView) {{
+    if (activeView[0] === 'course') showDeps(activeView[1]);
+    else if (activeView[0] === 'inst') showInst(activeView[1]);
+    else if (activeView[0] === 'program') showProgram(activeView[1]);
+  }}
+}}
+
+// Re-theme the baked plotly_white dashboard charts for dark mode by patching
+// backgrounds, fonts, and gridlines on each graph div (no re-render needed).
+function chartTheme(dark) {{
+  return dark
+    ? {{fg: '#cabfb0', grid: 'rgba(232,224,212,0.10)', zero: 'rgba(232,224,212,0.20)', line: 'rgba(232,224,212,0.26)'}}
+    : {{fg: '#4a4a4a', grid: 'rgba(0,0,0,0.08)', zero: 'rgba(0,0,0,0.15)', line: 'rgba(0,0,0,0.20)'}};
+}}
+function themeChart(gd, dark) {{
+  if (typeof Plotly === 'undefined' || !gd || !gd.layout) return;
+  const c = chartTheme(dark);
+  const patch = {{
+    'paper_bgcolor': 'rgba(0,0,0,0)', 'plot_bgcolor': 'rgba(0,0,0,0)',
+    'font.color': c.fg, 'legend.bgcolor': 'rgba(0,0,0,0)',
+    'legend.font.color': c.fg, 'legend.bordercolor': c.line, 'title.font.color': c.fg
+  }};
+  Object.keys(gd.layout).forEach(k => {{
+    if (/^[xy]axis(\\d+)?$/.test(k)) {{
+      patch[k + '.gridcolor'] = c.grid;
+      patch[k + '.zerolinecolor'] = c.zero;
+      patch[k + '.linecolor'] = c.line;
+      patch[k + '.tickfont.color'] = c.fg;
+      patch[k + '.title.font.color'] = c.fg;
+    }}
+  }});
+  try {{ Plotly.relayout(gd, patch); }} catch (e) {{}}
+}}
+function themeAllCharts(dark) {{
+  document.querySelectorAll('.plotly-graph-div').forEach(gd => themeChart(gd, dark));
+}}
 
 // Populate semester dropdown
 const semesters = [...new Set(courseData.map(r => r.term_name))];
-const semSelect = document.getElementById('course-semester');
+const semSelect = document.getElementById('courses-semester');
 semesters.forEach(s => {{
   const opt = document.createElement('option');
   opt.value = s; opt.textContent = s;
@@ -2914,7 +3389,7 @@ function filterTable(type) {{
   let data = type === 'courses' ? courseData : catalogData;
 
   if (type === 'courses') {{
-    const sem = document.getElementById('course-semester').value;
+    const sem = document.getElementById('courses-semester').value;
     if (sem) data = data.filter(r => r.term_name === sem);
   }}
 
@@ -2924,6 +3399,39 @@ function filterTable(type) {{
   }}
 
   renderTable(type, data);
+  renderTableSummary(type, data);
+}}
+
+// Lightweight, fast-redrawing CSS bars that track the current table filter.
+function renderMiniBars(id, items, color) {{
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (!items.length) {{ el.innerHTML = '<span style="color: var(--text-light); font-size: 0.8rem;">No matches.</span>'; return; }}
+  const max = Math.max.apply(null, items.map(i => i[1])) || 1;
+  el.innerHTML = items.map(i =>
+    `<div class="mb-row"><span class="mb-label" title="${{i[0]}}">${{i[0]}}</span><span class="mb-track"><span class="mb-fill" style="width: ${{(i[1] / max * 100).toFixed(1)}}%; background: ${{color || '#C4972F'}};"></span></span><span class="mb-val">${{i[1].toLocaleString()}}</span></div>`
+  ).join('');
+}}
+
+function renderTableSummary(type, data) {{
+  if (type === 'courses') {{
+    const c = {{}};
+    data.forEach(r => {{ c[r.subject] = (c[r.subject] || 0) + 1; }});
+    const top = Object.entries(c).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    renderMiniBars('courses-summary', top, '#C4972F');
+  }} else {{
+    const c = {{}};
+    data.forEach(r => {{
+      const cr = (r.credit_hours == null || r.credit_hours === '') ? '?' : (Math.round(r.credit_hours) + ' cr');
+      c[cr] = (c[cr] || 0) + 1;
+    }});
+    const items = Object.entries(c).sort((a, b) => {{
+      const pa = a[0] === '?' ? Infinity : parseFloat(a[0]);
+      const pb = b[0] === '?' ? Infinity : parseFloat(b[0]);
+      return pa - pb;
+    }});
+    renderMiniBars('catalog-summary', items, '#2471a3');
+  }}
 }}
 
 let sortState = {{}};
@@ -2949,84 +3457,165 @@ function sortTable(type, col) {{
 }}
 
 function switchTab(tab) {{
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t =>
+    t.classList.toggle('active', (t.getAttribute('onclick') || '').includes("'" + tab + "'")));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  event.target.classList.add('active');
-  document.getElementById('tab-' + tab).classList.add('active');
+  const el = document.getElementById('tab-' + tab);
+  if (el) el.classList.add('active');
+}}
+function gotoCourse(code) {{ switchTab('course-explorer'); showDeps(code); }}
+function gotoInst(name) {{ switchTab('inst-explorer'); showInst(name); }}
+function gotoProgram(name) {{ switchTab('degree-explorer'); document.getElementById('degree-search').value = name; showProgram(name); }}
+
+// ---- Plotly mini-chart helpers (on demand, theme- and motion-aware) -------
+const PCFG = {{responsive: true, displayModeBar: false}};
+const PANIM = {{transition: {{duration: 650, easing: 'cubic-out'}}, frame: {{duration: 650}}}};
+function gridColor() {{ return isDark() ? '#3a342c' : '#ece8e0'; }}
+function fgColor() {{ return isDark() ? '#c8c0b2' : '#4a4a4a'; }}
+function plLayout(extra) {{
+  const grid = gridColor();
+  return Object.assign({{
+    height: 210, margin: {{l: 38, r: 12, t: 8, b: 30}},
+    font: {{family: 'Montserrat, sans-serif', size: 11, color: fgColor()}},
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+    bargap: 0.22, showlegend: false,
+    xaxis: {{gridcolor: grid, zeroline: false, automargin: true, fixedrange: true}},
+    yaxis: {{gridcolor: grid, zeroline: false, automargin: true, fixedrange: true}}
+  }}, extra || {{}});
+}}
+// Vertical bars (categories x, values y) that grow from zero. The axis range
+// is pinned to the data max so the grow-in animation doesn't clip.
+function colChart(id, x, y, color, hov, extra) {{
+  const el = document.getElementById(id);
+  if (!el) return;
+  const mx = (Math.max.apply(null, y) || 1) * 1.12;
+  const lay = plLayout(Object.assign(
+    {{yaxis: {{gridcolor: gridColor(), zeroline: false, automargin: true, fixedrange: true, range: [0, mx]}}}},
+    extra || {{}}));
+  if (prefersReduced) {{ Plotly.newPlot(id, [{{type: 'bar', x: x, y: y, marker: {{color: color, line: {{width: 0}}}}, hovertemplate: hov}}], lay, PCFG); return; }}
+  Plotly.newPlot(id, [{{type: 'bar', x: x, y: y.map(() => 0), marker: {{color: color, line: {{width: 0}}}}, hovertemplate: hov}}], lay, PCFG)
+    .then(() => Plotly.animate(id, {{data: [{{y: y}}]}}, PANIM));
+}}
+// Horizontal bars (categories y, values x) that grow from zero.
+function rowChart(id, cats, vals, color, hov, h) {{
+  const el = document.getElementById(id);
+  if (!el) return;
+  const mx = (Math.max.apply(null, vals) || 1) * 1.12;
+  const lay = plLayout({{height: h || 210, margin: {{l: 8, r: 14, t: 8, b: 26}},
+    xaxis: {{gridcolor: gridColor(), zeroline: false, automargin: true, fixedrange: true, range: [0, mx]}},
+    yaxis: {{automargin: true, fixedrange: true, ticksuffix: '  '}}}});
+  if (prefersReduced) {{ Plotly.newPlot(id, [{{type: 'bar', orientation: 'h', y: cats, x: vals, marker: {{color: color, line: {{width: 0}}}}, hovertemplate: hov}}], lay, PCFG); return; }}
+  Plotly.newPlot(id, [{{type: 'bar', orientation: 'h', y: cats, x: vals.map(() => 0), marker: {{color: color, line: {{width: 0}}}}, hovertemplate: hov}}], lay, PCFG)
+    .then(() => Plotly.animate(id, {{data: [{{x: vals}}]}}, PANIM));
 }}
 
-// ---- Dependency Explorer ----
+// ---- Course Explorer ----
+function statBox(v, label) {{
+  return `<div><div style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text); line-height: 1;">${{v}}</div><div style="font-size: 0.7rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em; margin-top: 0.3rem;">${{label}}</div></div>`;
+}}
+
 function searchDeps(query) {{
   const q = query.toUpperCase().trim();
   const sugBox = document.getElementById('dep-suggestions');
   if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
-  const matches = Object.keys(depData).filter(k => k.includes(q)).sort().slice(0, 12);
+  const matches = Object.keys(courseProfiles).filter(k => k.includes(q)).sort().slice(0, 14);
   if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
   sugBox.style.display = 'block';
   sugBox.innerHTML = matches.map(m =>
-    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-family: var(--font-mono); font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
+    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
           onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
-          onclick="showDeps('${{m}}')">${{m}}</div>`).join('');
+          onclick="showDeps('${{m}}')"><span style="font-family: var(--font-mono); font-weight: 500;">${{m}}</span> <span style="color: var(--text-muted);">${{courseName(m)}}</span></div>`).join('');
+}}
+
+// Recursive AND/OR prerequisite roadmap. Auto-expands one level into each
+// direct prerequisite; deeper levels show a "&rsaquo;" hint (click to drill in).
+function renderReqTree(node, visited, depth) {{
+  const MAXD = 1;
+  if (node.o) {{
+    const kids = node.x.map(k => renderReqTree(k, visited, depth)).join('');
+    return `<div class="cx-node"><span class="cx-op ${{node.o}}">${{node.o === 'and' ? 'all of' : 'one of'}}</span><div class="cx-kids">${{kids}}</div></div>`;
+  }}
+  const code = node.c;
+  const sub = prereqTrees[code];
+  const expand = sub && depth < MAXD && !visited.has(code);
+  let leaf = `<span class="cx-leaf" onclick="showDeps('${{code}}')"><span class="mono">${{code}}</span>` +
+    (node.g ? ` <span style="color: var(--accent);">(min ${{node.g}})</span>` : '') +
+    (node.k ? ` <span style="color: #16a085;">&#8635; concurrent</span>` : '') +
+    ` <span class="nm">${{courseName(code)}}</span>` +
+    (sub && !expand ? ' <span class="exp" title="has its own prerequisites">&rsaquo;</span>' : '') + `</span>`;
+  let html = `<div class="cx-node">${{leaf}}`;
+  if (expand) {{
+    const v2 = new Set(visited); v2.add(code);
+    html += `<div class="cx-kids">${{renderReqTree(sub, v2, depth + 1)}}</div>`;
+  }}
+  return html + `</div>`;
 }}
 
 function showDeps(course) {{
+  activeView = ['course', course];
   document.getElementById('dep-suggestions').style.display = 'none';
   document.getElementById('dep-search').value = course;
-  const data = depData[course];
   const result = document.getElementById('dep-result');
-  if (!data) {{ result.innerHTML = '<p style="color: var(--text-muted);">Course not found in dependency graph.</p>'; return; }}
+  const p = courseProfiles[course];
+  const dep = depData[course];
+  const tree = prereqTrees[course];
+  if (!p && !dep) {{ result.innerHTML = '<p style="color: var(--text-muted);">Course not found.</p>'; return; }}
 
-  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 1rem; color: var(--accent);">${{course}}</h3>`;
+  const nm = courseName(course);
+  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 0.75rem; color: var(--accent);">${{course}}${{nm ? ' <span style="color: var(--text-secondary); font-weight: 500; font-size: 1.05rem;">' + nm + '</span>' : ''}}</h3>`;
 
-  // Prerequisites
-  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Prerequisites (' + data.p.length + ')</h4>';
-  if (data.p.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">None</p>'; }}
-  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + data.p.map(p =>
-    `<span style="background: var(--accent-bg); border: 1px solid #f0dbd8; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{p.c}}')">${{p.c}}${{p.g ? ' (min: ' + p.g + ')' : ''}}</span>`
-  ).join('') + '</div>'; }}
-  html += '</div>';
-
-  // Corequisites
-  const coreqs = data.q || [];
-  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Corequisites (' + coreqs.length + ')</h4>';
-  if (coreqs.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">None</p>'; }}
-  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + coreqs.map(c =>
-    `<span style="background: #f3e8f9; border: 1px solid #d5b8e8; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`
-  ).join('') + '</div>'; }}
-  html += '</div>';
-
-  // Needed by
-  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Is Prerequisite For (' + data.n.length + ')</h4>';
-  if (data.n.length === 0) {{ html += '<p style="color: var(--text-light); font-size: 0.9rem;">No courses depend on this</p>'; }}
-  else {{ html += '<div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">' + data.n.map(c =>
-    `<span style="background: #e8f5e9; border: 1px solid #a5d6a7; padding: 0.3rem 0.7rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`
-  ).join('') + '</div>'; }}
-  html += '</div>';
-
-  // Full prerequisite chain (recursive)
-  function getChain(c, visited) {{
-    if (!depData[c] || visited.has(c)) return [c];
-    visited.add(c);
-    if (depData[c].p.length === 0) return [c];
-    const longest = depData[c].p.reduce((best, p) => {{
-      const chain = getChain(p.c, visited);
-      return chain.length > best.length ? chain : best;
-    }}, []);
-    return [...longest, c];
+  if (p) {{
+    html += '<div style="display: flex; gap: 2rem; flex-wrap: wrap; margin-bottom: 1rem;">';
+    if (p.cr != null) html += statBox(p.cr % 1 ? p.cr.toFixed(1) : p.cr, 'Credits');
+    html += statBox(p.ns.toLocaleString(), 'Sections');
+    html += statBox(p.nt, 'Semesters');
+    if (p.ni) html += statBox(p.ni, 'Instructors');
+    html += '</div>';
+    if (p.yc && p.yc.length) html += `<div class="cx-section"><div class="cx-label">Sections offered per year &middot; ${{p.ft}} &ndash; ${{p.lt}}</div><div id="cx-sections" style="min-height: 200px;"></div></div>`;
+    if (p.dy || p.tm) html += `<div class="cx-section"><div class="cx-label">Usually meets</div><div style="font-size: 0.9rem; color: var(--text-secondary);">${{p.dy ? '<strong>' + p.dy + '</strong>' : ''}}${{p.tm ? ' &middot; ' + p.tm : ''}}</div></div>`;
+    if (p.ins && p.ins.length) {{
+      html += `<div class="cx-section"><div class="cx-label">Taught by${{p.ni ? ' (' + p.ni + ' total)' : ''}}</div><div class="cx-chips">` +
+        p.ins.map(i => `<span class="cx-chip" onclick="gotoInst('${{i[0].replace(/'/g, "\\\\'")}}')"><span style="color: var(--text);">${{i[0]}}</span> <span style="color: var(--text-muted);">&middot; ${{i[1]}}</span></span>`).join('') + `</div></div>`;
+    }}
   }}
-  const chain = getChain(course, new Set());
-  if (chain.length > 1) {{
-    html += '<div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.75rem;">Longest Prerequisite Chain (' + chain.length + ' courses)</h4>';
-    html += '<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem;">';
-    chain.forEach((c, i) => {{
-      if (i > 0) html += '<span style="color: var(--accent); font-weight: 700;">&rarr;</span>';
-      const isCurrent = c === course;
-      html += `<span style="background: ${{isCurrent ? 'var(--accent)' : 'var(--bg-warm)'}}; color: ${{isCurrent ? '#fff' : 'var(--text)'}}; padding: 0.25rem 0.6rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.8rem; cursor: pointer;" onclick="showDeps('${{c}}')">${{c}}</span>`;
-    }});
-    html += '</div></div>';
+
+  const ctp = courseToPrograms[course];
+  if (ctp) {{
+    html += `<div class="cx-section"><div class="cx-label">Counts toward ${{ctp[0]}} degree program${{ctp[0] !== 1 ? 's' : ''}}</div><div class="cx-chips">` +
+      ctp[1].map(pn => `<span class="cx-chip prog" onclick="gotoProgram('${{pn.replace(/'/g, "\\\\'")}}')">${{pn}}</span>`).join('') +
+      (ctp[0] > ctp[1].length ? `<span style="color: var(--text-muted); font-size: 0.82rem; align-self: center;">+${{ctp[0] - ctp[1].length}} more</span>` : '') + `</div></div>`;
+  }}
+
+  if (tree) {{
+    html += `<div class="cx-section" style="margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border);"><div class="cx-label">Prerequisite Roadmap</div><div class="cx-tree">${{renderReqTree(tree, new Set([course]), 0)}}</div></div>`;
+  }} else if (dep && dep.p.length) {{
+    html += `<div class="cx-section" style="margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border);"><div class="cx-label">Prerequisites (${{dep.p.length}})</div><div class="cx-chips">` +
+      dep.p.map(pp => `<span class="cx-chip pre" onclick="showDeps('${{pp.c}}')"><span class="mono">${{pp.c}}</span>${{pp.g ? ' <span style="color: var(--accent);">(min ' + pp.g + ')</span>' : ''}} <span class="nm">${{courseName(pp.c)}}</span></span>`).join('') + `</div></div>`;
+  }}
+
+  const coreqs = (dep && dep.q) || [];
+  if (coreqs.length) {{
+    html += `<div class="cx-section"><div class="cx-label">Corequisites (${{coreqs.length}})</div><div class="cx-chips">` +
+      coreqs.map(c => `<span class="cx-chip co" onclick="showDeps('${{c}}')"><span class="mono">${{c}}</span> <span class="nm">${{courseName(c)}}</span></span>`).join('') + `</div></div>`;
+  }}
+
+  const nexts = (dep && dep.n) || [];
+  if (nexts.length) {{
+    html += `<div class="cx-section"><div class="cx-label">Unlocks &mdash; is a prerequisite for (${{nexts.length}})</div><div class="cx-chips">` +
+      nexts.map(c => `<span class="cx-chip next" onclick="showDeps('${{c}}')"><span class="mono">${{c}}</span> <span class="nm">${{courseName(c)}}</span></span>`).join('') + `</div></div>`;
   }}
 
   result.innerHTML = html;
+
+  // Animated sections-per-year chart (fill dormant years with zero).
+  if (p && p.yc && p.yc.length) {{
+    const cnt = {{}};
+    p.yc.forEach(d => cnt[d[0]] = d[1]);
+    const lo = Math.min.apply(null, p.yc.map(d => d[0])), hi = Math.max.apply(null, p.yc.map(d => d[0]));
+    const xs = [], vs = [];
+    for (let y = lo; y <= hi; y++) {{ xs.push(String(y)); vs.push(cnt[y] || 0); }}
+    colChart('cx-sections', xs, vs, '#C4972F', '%{{x}}: %{{y}} sections<extra></extra>', {{height: 195}});
+  }}
 }}
 
 // ---- Instructor Explorer ----
@@ -3034,7 +3623,7 @@ function searchInst(query) {{
   const q = query.toLowerCase().trim();
   const sugBox = document.getElementById('inst-suggestions');
   if (q.length < 2) {{ sugBox.style.display = 'none'; return; }}
-  const matches = Object.keys(instData).filter(k => k.toLowerCase().includes(q)).sort().slice(0, 12);
+  const matches = Object.keys(instData).filter(k => k.toLowerCase().includes(q)).sort().slice(0, 14);
   if (matches.length === 0) {{ sugBox.style.display = 'none'; return; }}
   sugBox.style.display = 'block';
   sugBox.innerHTML = matches.map(m =>
@@ -3044,44 +3633,120 @@ function searchInst(query) {{
 }}
 
 function showInst(name) {{
+  activeView = ['inst', name];
   document.getElementById('inst-suggestions').style.display = 'none';
   document.getElementById('inst-search').value = name;
   const data = instData[name];
   const result = document.getElementById('inst-result');
   if (!data) {{ result.innerHTML = '<p style="color: var(--text-muted);">Instructor not found.</p>'; return; }}
 
-  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 0.5rem; color: var(--accent);">${{name}}</h3>`;
-
-  // Stats row
-  html += '<div style="display: flex; gap: 2rem; margin-bottom: 1.5rem; flex-wrap: wrap;">';
-  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.t}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Sections</span></div>`;
-  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.n}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Semesters</span></div>`;
-  html += `<div><span style="font-family: var(--font-mono); font-size: 1.5rem; font-weight: 600; color: var(--text);">${{data.s.length}}</span><br><span style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.1em;">Subjects</span></div>`;
+  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 0.75rem; color: var(--accent);">${{name}}</h3>`;
+  html += '<div style="display: flex; gap: 2rem; margin-bottom: 1rem; flex-wrap: wrap;">';
+  html += statBox(data.t.toLocaleString(), 'Sections') + statBox(data.n, 'Semesters') + statBox(data.s.length, 'Subjects');
   html += '</div>';
-
-  // Tenure
   html += `<p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1rem;"><strong>Active:</strong> ${{data.f}} &mdash; ${{data.l}}</p>`;
-
-  // Subjects
-  html += '<div style="margin-bottom: 1.5rem;"><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Subjects Taught</h4>';
-  html += '<div style="display: flex; flex-wrap: wrap; gap: 0.4rem;">' + data.s.map(s =>
+  if (data.a && data.a.length > 1) html += `<div class="cx-section"><div class="cx-label">Sections taught per year</div><div id="inst-timeline" style="min-height: 200px;"></div></div>`;
+  if (data.sm && data.sm.length > 1) html += `<div class="cx-section"><div class="cx-label">Teaching by subject</div><div id="inst-subjects" style="min-height: 180px;"></div></div>`;
+  html += '<div class="cx-section"><div class="cx-label">Subjects Taught</div><div class="cx-chips">' + data.s.map(s =>
     `<span style="background: var(--bg-warm); border: 1px solid var(--border); padding: 0.2rem 0.6rem; border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: 0.82rem;">${{s}}</span>`
   ).join('') + '</div></div>';
-
-  // Top courses
-  html += '<div><h4 style="font-family: var(--font-mono); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-muted); margin-bottom: 0.5rem;">Top Courses (by times taught)</h4>';
-  html += '<table style="width: 100%; font-size: 0.85rem;"><thead><tr><th style="text-align: left; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Course</th><th style="text-align: left; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Title</th><th style="text-align: right; padding: 0.4rem; font-weight: 600; color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; border-bottom: 1px solid var(--border);">Times</th></tr></thead><tbody>';
-  data.c.forEach(c => {{
-    html += `<tr><td style="padding: 0.4rem; font-family: var(--font-mono); font-size: 0.82rem;">${{c[0]}} ${{c[1]}}</td><td style="padding: 0.4rem; color: var(--text-secondary);">${{c[2]}}</td><td style="padding: 0.4rem; text-align: right; font-family: var(--font-mono); font-weight: 600;">${{c[3]}}</td></tr>`;
-  }});
-  html += '</tbody></table></div>';
-
+  html += '<div class="cx-section"><div class="cx-label">Top Courses &mdash; click to open in the Course Explorer</div><div class="cx-chips">' +
+    data.c.map(c => `<span class="cx-chip" onclick="gotoCourse('${{c[0]}} ${{c[1]}}')"><span class="mono">${{c[0]}} ${{c[1]}}</span> <span class="nm">${{c[2]}}</span> <span style="color: var(--text-muted);">&middot; ${{c[3]}}&times;</span></span>`).join('') + '</div></div>';
   result.innerHTML = html;
+
+  if (data.a && data.a.length > 1) {{
+    const cnt = {{}};
+    data.a.forEach(d => cnt[d[0]] = d[1]);
+    const lo = Math.min.apply(null, data.a.map(d => d[0])), hi = Math.max.apply(null, data.a.map(d => d[0]));
+    const xs = [], vs = [];
+    for (let y = lo; y <= hi; y++) {{ xs.push(String(y)); vs.push(cnt[y] || 0); }}
+    colChart('inst-timeline', xs, vs, '#9e3223', '%{{x}}: %{{y}} sections<extra></extra>', {{height: 195}});
+  }}
+  if (data.sm && data.sm.length > 1) {{
+    const cats = data.sm.map(d => d[0]).reverse(), vals = data.sm.map(d => d[1]).reverse();
+    rowChart('inst-subjects', cats, vals, '#2471a3', '%{{y}}: %{{x}} sections<extra></extra>', Math.max(150, cats.length * 26));
+  }}
 }}
 
-// Initial render
-renderTable('courses', courseData);
-renderTable('catalog', catalogData);
+// ---- Degree Explorer ----
+function hideSoon(id) {{ setTimeout(() => {{ const b = document.getElementById(id); if (b) b.style.display = 'none'; }}, 150); }}
+
+function searchProgram(query) {{
+  const q = query.toLowerCase().trim();
+  const box = document.getElementById('degree-suggestions');
+  const keys = Object.keys(programMap).sort();
+  const matches = (q ? keys.filter(k => k.toLowerCase().includes(q)) : keys).slice(0, 60);
+  if (!matches.length) {{ box.style.display = 'none'; return; }}
+  box.style.display = 'block';
+  box.innerHTML = matches.map(m =>
+    `<div style="padding: 0.5rem 1rem; cursor: pointer; font-size: 0.85rem; border-bottom: 1px solid var(--border-light);"
+          onmouseover="this.style.background='var(--bg-warm)'" onmouseout="this.style.background=''"
+          onmousedown="pickProgram('${{m.replace(/'/g, "\\\\'")}}')">${{m}} <span style="color: var(--text-muted);">&middot; ${{programMap[m].length}} courses</span></div>`).join('');
+}}
+function pickProgram(name) {{
+  document.getElementById('degree-search').value = name;
+  document.getElementById('degree-suggestions').style.display = 'none';
+  showProgram(name);
+}}
+
+// Banner's course_attributes only ever express elective options and
+// requirement-area tags — never a program's required core sequence (that lives
+// in the degree plan). So label the buckets honestly rather than calling
+// everything an "elective".
+const ROLE_LABELS = {{
+  Required: 'Required courses', Core: 'Core courses',
+  Elective: 'Elective options', Other: 'Requirement-area &amp; other courses'
+}};
+function showProgram(name) {{
+  const result = document.getElementById('degree-result');
+  const courses = programMap[name];
+  if (!courses) {{ return; }}
+  activeView = ['program', name];
+  const groups = {{ Required: [], Core: [], Elective: [], Other: [] }};
+  const subjCount = {{}};
+  courses.forEach(pair => {{
+    (groups[pair[1]] || groups.Other).push(pair[0]);
+    const subj = pair[0].split(' ')[0];
+    subjCount[subj] = (subjCount[subj] || 0) + 1;
+  }});
+  let html = `<h3 style="font-family: var(--font-display); margin-bottom: 0.75rem; color: var(--accent);">${{name}} <span style="color: var(--text-muted); font-weight: 500; font-size: 0.9rem;">(${{courses.length}} courses)</span></h3>`;
+  html += `<div class="cx-note">These are the courses AUS's catalog tags as counting toward <strong>${{name}}</strong> &mdash; its elective options and requirement-area courses. A program's required core sequence is defined in the degree plan, not as course attributes, so it isn't fully captured here.</div>`;
+  html += `<div class="cx-section"><div class="cx-label">Course pool by subject (top 15)</div><div id="degree-subjects" style="min-height: 200px;"></div></div>`;
+  ['Required', 'Core', 'Elective', 'Other'].forEach(role => {{
+    const list = groups[role];
+    if (!list.length) return;
+    const chips = list.sort().map(code => `<span class="cx-chip" onclick="gotoCourse('${{code}}')"><span class="mono">${{code}}</span> <span class="nm">${{courseName(code)}}</span></span>`).join('');
+    const label = `<div class="cx-label">${{ROLE_LABELS[role] || role}} (${{list.length}})</div>`;
+    if (list.length > 24) {{
+      html += `<div class="cx-section">${{label}}<div class="cx-scrollbox"><div class="cx-chips scrolly">${{chips}}</div><div class="cx-fade"></div><div class="cx-more-hint">scroll for more &darr;</div></div></div>`;
+    }} else {{
+      html += `<div class="cx-section">${{label}}<div class="cx-chips">${{chips}}</div></div>`;
+    }}
+  }});
+  result.innerHTML = html;
+  wireScrollboxes(result);
+
+  const top = Object.entries(subjCount).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  if (top.length) {{
+    const cats = top.map(d => d[0]).reverse(), vals = top.map(d => d[1]).reverse();
+    rowChart('degree-subjects', cats, vals, '#27ae60', '%{{y}}: %{{x}} courses<extra></extra>', Math.max(160, cats.length * 24));
+  }}
+}}
+
+// Toggle the "more below" fade/hint on any scrollable chip pool inside `root`.
+function wireScrollboxes(root) {{
+  (root || document).querySelectorAll('.cx-scrollbox').forEach(box => {{
+    const sc = box.querySelector('.scrolly');
+    if (!sc) return;
+    const upd = () => box.classList.toggle('more', sc.scrollTop + sc.clientHeight < sc.scrollHeight - 4);
+    sc.addEventListener('scroll', upd, {{ passive: true }});
+    requestAnimationFrame(upd);
+  }});
+}}
+
+// Initial render (filterTable also paints the live summary mini-charts)
+filterTable('courses');
+filterTable('catalog');
 
 // Active nav on scroll
 const sections = document.querySelectorAll('section[id]');
@@ -3095,6 +3760,49 @@ window.addEventListener('scroll', () => {{
     a.classList.toggle('active', a.getAttribute('href') === '#' + current);
   }});
 }}, {{ passive: true }});
+
+// Nav horizontal-scroll affordance: fade the edge(s) that have more links.
+(function () {{
+  const scroller = document.getElementById('nav-inner');
+  const wrap = document.getElementById('nav-scroll');
+  if (!scroller || !wrap) return;
+  const upd = () => {{
+    const max = scroller.scrollWidth - scroller.clientWidth;
+    wrap.classList.toggle('more-left', scroller.scrollLeft > 2);
+    wrap.classList.toggle('more-right', scroller.scrollLeft < max - 2);
+  }};
+  scroller.addEventListener('scroll', upd, {{ passive: true }});
+  window.addEventListener('resize', upd, {{ passive: true }});
+  upd();
+}})();
+
+// Lazy chart rendering: only draw a chart when it scrolls near the viewport,
+// instead of laying out all 62 on load. Plotly is loaded with `defer`, so we
+// wait for DOMContentLoaded (deferred scripts run before it) to be sure it's
+// ready. Each chart re-themes itself for dark mode at render time.
+function setupLazyCharts() {{
+  let specs;
+  try {{ specs = JSON.parse(document.getElementById('chart-data').textContent); }}
+  catch (e) {{ return; }}
+  const draw = (el) => {{
+    if (el.dataset.rendered) return;
+    const spec = specs[el.getAttribute('data-cid')];
+    if (!spec || typeof Plotly === 'undefined') return;
+    el.dataset.rendered = '1';
+    Plotly.newPlot(el, spec.data, spec.layout, {{responsive: true}}).then(() => {{
+      el.style.minHeight = '';
+      if (isDark()) themeChart(el, true);
+    }});
+  }};
+  // Generous lead margin: render charts ~600px before they enter view so the
+  // (one-time) Plotly init cost is paid off-screen and no empty box flashes.
+  const io = new IntersectionObserver((entries, obs) => {{
+    entries.forEach(e => {{ if (e.isIntersecting) {{ obs.unobserve(e.target); draw(e.target); }} }});
+  }}, {{ rootMargin: '600px 0px' }});
+  document.querySelectorAll('.lazy-chart').forEach(el => io.observe(el));
+}}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setupLazyCharts);
+else setupLazyCharts();
 </script>
 </body>
 </html>"""

@@ -19,7 +19,7 @@
 
 ---
 
-An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, searchable data tables, an interactive course dependency explorer, instructor career lookup, and a prerequisite network of 156,512 links — all in a single self-contained HTML page.
+An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, a cross-linked **Course Explorer** (full profiles + visual prerequisite roadmaps), instructor lookup, a **Degree Explorer**, searchable data tables, and a prerequisite network of 156,512 links — all in a single self-contained HTML page.
 
 **Data source:** [AUSCrawl](https://github.com/DeadPackets/AUSCrawl)
 
@@ -44,7 +44,7 @@ An interactive data visualization dashboard exploring every course offered at th
 | **Course Attributes** | 4 | Gen-Ed and major attribute tag distribution, attribute category evolution over time, **plus Degree Requirement Mapping**: programs with the most elective course options, and the most reusable courses across degree programs |
 | **Course Catalog** | 3 | Credit hours distribution, lecture vs lab section ratio with trend, lab and lecture hours breakdown by department |
 | **Enrollment & Access** | 4 | Section closure per semester (open vs closed seats; completed terms only), closure rate by subject, typed include/exclude enrollment restrictions, and the courses most often gated to a specific major/college/program. **Note:** Banner exposes only a binary open/closed flag, never seat counts — these track section *closure*, not a true fill rate |
-| **Browse & Explore** | — | Searchable course table (73K+ rows, filterable by semester), searchable catalog table, **interactive dependency explorer** (prerequisite chains, corequisites, reverse dependencies), **instructor career lookup** (tenure, subjects, top courses) |
+| **Browse & Explore** | — | **Course Explorer** — search any course for its full profile (credits, animated sections-per-year chart, usual times, instructors), a visual **AND/OR prerequisite roadmap**, corequisites, what it unlocks, and which degree programs it counts toward; **Instructor Lookup** — career-activity timeline, teaching-by-subject breakdown, tenure, and top courses; **Degree Explorer** — every course tagged toward a major/minor with a subject-composition chart; and searchable course + catalog tables with live filter-responsive summary bars. Everything is cross-linked — one click jumps between courses, instructors, and programs |
 
 ---
 
