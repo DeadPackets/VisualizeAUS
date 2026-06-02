@@ -25,10 +25,16 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install pandas numpy plotly networkx
+        run: pip install pandas numpy plotly networkx pytest
 
-      - name: Download database from AUSCrawl
-        run: curl -L -o aus_courses.db https://github.com/DeadPackets/AUSCrawl/raw/master/aus_courses.db
+      - name: Download database from AUSCrawl (latest release asset)
+        run: |
+          curl -fL -o aus_courses.db.gz \
+            https://github.com/DeadPackets/AUSCrawl/releases/latest/download/aus_courses.db.gz
+          gunzip aus_courses.db.gz
+
+      - name: Run tests
+        run: pytest -q
 
       - name: Build site
         run: python build.py

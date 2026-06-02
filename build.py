@@ -21,6 +21,8 @@ import plotly.io as pio
 from plotly.subplots import make_subplots
 import networkx as nx
 
+import analysis
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -586,7 +588,17 @@ fig.update_layout(template=TEMPLATE, title="Average Lecture vs Lab Hours by Depa
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
 charts["lecture_lab"] = chart_html(fig, "lecture_lab")
 
-# ===== 8. Enrollment =====
+# ===== 8. Section closure (NOT enrollment counts — see note) =====
+# Banner exposes only a binary "open seats? Y/N" flag at crawl time, never a
+# seat count or enrolment total. For a *completed* term this flag effectively
+# records whether the section closed (ran out of open seats); for the term
+# that is still in open registration it is a live, not-yet-final snapshot, so
+# we exclude that most-recent regular term from the closure trend.
+latest_regular_term = pd.read_sql_query("""
+    SELECT MAX(s.term_id) AS t FROM courses c JOIN semesters s ON c.term_id = s.term_id
+    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
+""", conn).iloc[0]["t"]
+
 df_seats = pd.read_sql_query("""
     SELECT s.term_name, s.term_id,
            SUM(CASE WHEN c.seats_available = 1 THEN 1 ELSE 0 END) as available,
@@ -594,31 +606,42 @@ df_seats = pd.read_sql_query("""
            COUNT(*) as total,
            ROUND(100.0 * SUM(CASE WHEN c.seats_available = 0 THEN 1 ELSE 0 END) / COUNT(*), 1) as full_pct
     FROM courses c JOIN semesters s ON c.term_id = s.term_id
-    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
+    WHERE (s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%')
+      AND c.term_id < ?
     GROUP BY c.term_id ORDER BY c.term_id
-""", conn)
-fig = go.Figure()
-fig.add_trace(go.Bar(x=df_seats["term_name"], y=df_seats["available"], name="Available", marker_color="#2ecc71"))
-fig.add_trace(go.Bar(x=df_seats["term_name"], y=df_seats["full_sections"], name="Full", marker_color="#e74c3c"))
-fig.update_layout(template=TEMPLATE, title="Section Availability Per Semester",
+""", conn, params=[latest_regular_term])
+fig = make_subplots(specs=[[{"secondary_y": True}]])
+fig.add_trace(go.Bar(x=df_seats["term_name"], y=df_seats["available"],
+    name="Had open seats", marker_color="#2ecc71"), secondary_y=False)
+fig.add_trace(go.Bar(x=df_seats["term_name"], y=df_seats["full_sections"],
+    name="Closed (no open seats)", marker_color="#e74c3c"), secondary_y=False)
+fig.add_trace(go.Scatter(x=df_seats["term_name"], y=df_seats["full_pct"],
+    name="% closed", mode="lines+markers", line=dict(color="#7b241c", width=2),
+    marker=dict(size=4)), secondary_y=True)
+fig.update_layout(template=TEMPLATE, title="Section Closure Per Semester (Completed Terms)",
                   barmode="stack", height=450, xaxis=dict(tickangle=-45, dtick=4),
-                  yaxis_title="Sections",
                   legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+fig.update_yaxes(title_text="Sections", secondary_y=False)
+fig.update_yaxes(title_text="% Closed", secondary_y=True, range=[0, 100])
 charts["enrollment"] = chart_html(fig, "enrollment")
 
-# ===== 8b. Subject fill rate =====
+closure_early = float(df_seats["full_pct"].iloc[:6].mean())
+closure_recent = float(df_seats["full_pct"].iloc[-6:].mean())
+
+# ===== 8b. Closure rate by subject (completed terms only) =====
 df_subj_full = pd.read_sql_query("""
     SELECT subject,
            SUM(CASE WHEN seats_available = 0 THEN 1 ELSE 0 END) as full_count,
            COUNT(*) as total,
            ROUND(100.0 * SUM(CASE WHEN seats_available = 0 THEN 1 ELSE 0 END) / COUNT(*), 1) as full_pct
-    FROM courses GROUP BY subject HAVING total >= 50 ORDER BY full_pct DESC
-""", conn)
+    FROM courses WHERE term_id < ?
+    GROUP BY subject HAVING total >= 50 ORDER BY full_pct DESC
+""", conn, params=[latest_regular_term])
 fig = px.bar(df_subj_full.head(25), x="subject", y="full_pct",
              color="full_pct", color_continuous_scale="RdYlGn_r",
              hover_data=["full_count", "total"],
-             title="Subject Fill Rate: % of Sections That Were Full",
-             labels={"full_pct": "% Full", "subject": "Subject"})
+             title="Section Closure Rate by Subject (% of Sections That Filled)",
+             labels={"full_pct": "% Closed", "subject": "Subject"})
 fig.update_layout(template=TEMPLATE, height=450)
 fig.update_coloraxes(showscale=False)
 charts["fill_rate"] = chart_html(fig, "fill_rate")
@@ -1394,42 +1417,291 @@ charts['attributes_over_time'] = chart_html(fig, 'attributes_over_time')
 
 total_unique_attrs = len(attr_counts)
 
-# ===== NEW: Enrollment Restrictions =====
-df_restrictions = pd.read_sql_query("""
-    SELECT sd.restrictions, COUNT(*) as sections
+# ===== NEW: Typed enrollment restrictions =====
+# AUSCrawl's typed `restrictions_json` is only populated for recently-fetched
+# sections, but the raw `restrictions` text — present for ~90% of sections —
+# is highly regular, so we parse it into typed include/exclude groups for full
+# coverage (see analysis.restriction_text_groups).
+df_restr = pd.read_sql_query("""
+    SELECT sd.crn, sd.term_id, sd.restrictions
     FROM section_details sd
-    WHERE sd.restrictions != ''
-    GROUP BY sd.restrictions
+    WHERE sd.restrictions != '' AND sd.restrictions IS NOT NULL
 """, conn)
 
-def categorize_restriction(r):
-    r_lower = str(r).lower()
-    if 'level' in r_lower and 'undergraduate' in r_lower and 'graduate' not in r_lower: return 'Undergraduate Only'
-    if 'level' in r_lower and 'graduate' in r_lower and 'undergraduate' not in r_lower: return 'Graduate Only'
-    if 'level' in r_lower: return 'Level Restriction (Mixed)'
-    if 'major' in r_lower or 'program' in r_lower: return 'Major/Program'
-    if 'college' in r_lower or 'school' in r_lower: return 'College/School'
-    if 'class' in r_lower or 'standing' in r_lower: return 'Class Standing'
-    if 'department' in r_lower: return 'Department'
-    return 'Other'
+restr_label_counts = Counter()
+restr_section_courses = []   # (course, title) for sections gated to a specific major/college/program
+sec_course_map = pd.read_sql_query(
+    "SELECT DISTINCT crn, term_id, subject, course_number, title FROM courses", conn)
+sec_lookup = {(r.crn, r.term_id): (f"{r.subject} {r.course_number}", r.title)
+              for r in sec_course_map.itertuples()}
 
-restriction_cats = Counter()
-for _, row in df_restrictions.iterrows():
-    cat = categorize_restriction(row['restrictions'])
-    restriction_cats[cat] += row['sections']
+total_restricted = 0
+selective_sections = 0   # sections gated by a specific college/major/program/field
+for row in df_restr.itertuples():
+    groups = analysis.restriction_text_groups(row.restrictions)
+    if not groups:
+        continue
+    total_restricted += 1
+    for g in groups:
+        restr_label_counts[analysis.restriction_label(g)] += 1
+    if analysis.restriction_text_is_selective(row.restrictions):
+        selective_sections += 1
+        course = sec_lookup.get((row.crn, row.term_id))
+        if course:
+            restr_section_courses.append(course)
 
-df_restrict = pd.DataFrame(restriction_cats.most_common(), columns=['category', 'sections'])
-df_restrict['pct'] = (df_restrict['sections'] / df_restrict['sections'].sum() * 100).round(1)
+# N9: typed include/exclude restriction breakdown.
+# Level gates are near-universal (every undergrad course is "undergraduate-
+# only") and would dwarf everything, so the chart focuses on the rules that
+# narrow further; the selective share is reported in the narrative instead.
+df_rlabels = pd.DataFrame(
+    [(lbl, n) for lbl, n in restr_label_counts.most_common() if "Level" not in lbl],
+    columns=["label", "count"])
+df_rlabels["kind"] = df_rlabels["label"].apply(
+    lambda l: "Must be (include)" if l.startswith("Must be") else "Must not be (exclude)")
+fig = px.bar(df_rlabels.sort_values("count"), x="count", y="label", orientation="h",
+             color="kind", color_discrete_map={"Must be (include)": "#2471a3",
+                                                "Must not be (exclude)": "#c0392b"},
+             title="Selective Enrollment Restrictions by Type",
+             labels={"count": "Section-Term Occurrences", "label": "", "kind": ""})
+fig.update_layout(template=TEMPLATE, height=460, margin=dict(l=180),
+                  legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+charts["restrictions_typed"] = chart_html(fig, "restrictions_typed")
+selective_section_pct = round(selective_sections / table_counts['section_details'] * 100, 1)
 
-fig = px.pie(df_restrict, values='sections', names='category',
-             title="Types of Enrollment Restrictions",
-             color_discrete_sequence=px.colors.qualitative.Set2)
-fig.update_traces(textposition='inside', textinfo='percent+label')
-fig.update_layout(template=TEMPLATE, height=450)
-charts['restriction_types'] = chart_html(fig, 'restriction_types')
+# N10: courses most often gated to a specific major / college / program
+restr_course_counts = Counter(c for c, _ in restr_section_courses)
+restr_titles = dict(restr_section_courses)
+df_restricted_courses = pd.DataFrame(
+    [(c, restr_titles.get(c, ""), n) for c, n in restr_course_counts.most_common(18)],
+    columns=["course", "title", "sections"]).sort_values("sections")
+fig = go.Figure(go.Bar(
+    y=[f"{r.course} — {r.title[:34]}" for r in df_restricted_courses.itertuples()],
+    x=df_restricted_courses["sections"], orientation="h", marker_color="#8e44ad",
+    hovertemplate="%{y}<br>%{x} restricted section-terms<extra></extra>"))
+fig.update_layout(template=TEMPLATE,
+                  title="Courses Most Restricted by Major / College / Program",
+                  height=max(450, len(df_restricted_courses) * 26),
+                  xaxis_title="Restricted Section-Terms", margin=dict(l=320),
+                  yaxis=dict(autorange="reversed"))
+charts["restricted_courses"] = chart_html(fig, "restricted_courses")
 
-total_restricted = int(df_restrictions['sections'].sum())
 restricted_pct = round(total_restricted / table_counts['section_details'] * 100, 1)
+selective_restricted = int(len(set(c for c, _ in restr_section_courses)))
+
+# ===========================================================================
+# NEW COVERAGE CHARTS — section_instructors, prerequisite trees, catalog_detail
+# ===========================================================================
+
+# ----- Team Teaching (section_instructors) --------------------------------
+# One row per (section, instructor); collapse to per-section instructor counts.
+df_si_counts = pd.read_sql_query("""
+    SELECT crn, term_id, COUNT(*) AS n FROM section_instructors GROUP BY crn, term_id
+""", conn)
+
+# N1: co-instruction rate over time
+df_co_time = pd.read_sql_query("""
+    SELECT s.term_name, s.term_id, COUNT(*) AS sections,
+           SUM(CASE WHEN si.n > 1 THEN 1 ELSE 0 END) AS co_taught
+    FROM (SELECT crn, term_id, COUNT(*) AS n FROM section_instructors GROUP BY crn, term_id) si
+    JOIN semesters s ON s.term_id = si.term_id
+    WHERE s.term_name LIKE 'Fall%' OR s.term_name LIKE 'Spring%'
+    GROUP BY si.term_id ORDER BY si.term_id
+""", conn)
+df_co_time["co_pct"] = (df_co_time["co_taught"] / df_co_time["sections"] * 100).round(1)
+fig = px.area(df_co_time, x="term_name", y="co_pct",
+              title="Co-Taught Sections Over Time (% With 2+ Instructors)",
+              labels={"co_pct": "% Co-Taught", "term_name": "Semester"},
+              color_discrete_sequence=[AUS_GOLD])
+fig.update_traces(line=dict(width=2))
+fig.update_layout(template=TEMPLATE, height=420, xaxis=dict(tickangle=-45, dtick=4))
+charts["co_time"] = chart_html(fig, "co_time")
+co_overall_pct = round(df_si_counts["n"].gt(1).mean() * 100, 1)
+
+# N2: co-teaching rate by department
+df_co_dept = pd.read_sql_query("""
+    SELECT subj.subject, COUNT(*) AS total,
+           SUM(CASE WHEN si.n > 1 THEN 1 ELSE 0 END) AS co_taught
+    FROM (SELECT crn, term_id, COUNT(*) AS n FROM section_instructors GROUP BY crn, term_id) si
+    JOIN (SELECT DISTINCT crn, term_id, subject FROM courses) subj
+      ON subj.crn = si.crn AND subj.term_id = si.term_id
+    GROUP BY subj.subject HAVING total >= 150 ORDER BY 1.0 * co_taught / total DESC LIMIT 18
+""", conn)
+df_co_dept["co_pct"] = (df_co_dept["co_taught"] / df_co_dept["total"] * 100).round(1)
+fig = px.bar(df_co_dept.sort_values("co_pct"), x="co_pct", y="subject", orientation="h",
+             color="co_pct", color_continuous_scale="Purples",
+             hover_data=["co_taught", "total"],
+             title="Co-Teaching Rate by Department (Top 18)",
+             labels={"co_pct": "% of Sections Co-Taught", "subject": ""})
+fig.update_layout(template=TEMPLATE, height=520)
+fig.update_coloraxes(showscale=False)
+charts["co_dept"] = chart_html(fig, "co_dept")
+
+# N3: most frequent co-teaching partnerships
+df_si_all = pd.read_sql_query("""
+    SELECT crn, term_id, name FROM section_instructors
+    WHERE name != '' AND name != 'TBA'
+""", conn)
+pair_counter = Counter()
+for (crn, term_id), grp in df_si_all.groupby(["crn", "term_id"]):
+    names = sorted(set(grp["name"]))
+    if len(names) < 2:
+        continue
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            pair_counter[(names[i], names[j])] += 1
+top_pairs = pair_counter.most_common(15)
+if top_pairs:
+    pair_labels = [f"{a}  +  {b}" for (a, b), _ in top_pairs]
+    pair_counts = [n for _, n in top_pairs]
+    fig = go.Figure(go.Bar(y=pair_labels[::-1], x=pair_counts[::-1], orientation="h",
+        marker_color="#9b59b6",
+        hovertemplate="%{y}<br>%{x} sections together<extra></extra>"))
+    fig.update_layout(template=TEMPLATE, title="Most Frequent Co-Teaching Partnerships",
+                      height=520, xaxis_title="Sections Taught Together", margin=dict(l=320))
+    charts["co_pairs"] = chart_html(fig, "co_pairs")
+
+# ----- Prerequisite logic & complexity (prerequisites_json) ----------------
+df_sd_pre = pd.read_sql_query("""
+    SELECT crn, term_id, prerequisites_json FROM section_details
+    WHERE prerequisites_json NOT IN ('', '[]', 'null') AND prerequisites_json IS NOT NULL
+""", conn)
+pl_rows = []
+for row in df_sd_pre.itertuples():
+    tree = analysis.load_tree(row.prerequisites_json)
+    if not tree:
+        continue
+    course = sec_lookup.get((row.crn, row.term_id))
+    if not course:
+        continue
+    code, title = course
+    pl_rows.append({
+        "term_id": row.term_id, "year": int(str(row.term_id)[:4]),
+        "subject": code.split(" ")[0], "course": code, "title": title,
+        "shape": analysis.classify_prereq_shape(tree),
+        "depth": analysis.tree_depth(tree),
+        "mandatory": analysis.tree_mandatory_count(tree),
+        "has_or": analysis.tree_has_or(tree),
+        "concurrent": analysis.tree_has_concurrent(tree),
+    })
+df_pl = pd.DataFrame(pl_rows)
+# Course-level view: latest tree per course (prereqs evolve over time).
+df_pl_course = df_pl.sort_values("term_id").drop_duplicates("course", keep="last")
+
+# N4: prerequisite shape distribution
+shape_order = ["Single course", "All required (AND)", "Has alternatives (OR)", "Complex (nested AND/OR)"]
+shape_colors = {"Single course": "#95a5a6", "All required (AND)": "#2471a3",
+                "Has alternatives (OR)": "#27ae60", "Complex (nested AND/OR)": "#c0392b"}
+df_shape = df_pl_course["shape"].value_counts().reindex(shape_order).fillna(0).reset_index()
+df_shape.columns = ["shape", "courses"]
+fig = px.bar(df_shape, x="shape", y="courses", color="shape",
+             color_discrete_map=shape_colors,
+             title="How Are Course Prerequisites Structured?",
+             labels={"courses": "Unique Courses", "shape": ""})
+fig.update_layout(template=TEMPLATE, height=430, showlegend=False)
+charts["prereq_shape"] = chart_html(fig, "prereq_shape")
+or_share = round((df_pl_course["has_or"]).mean() * 100, 1)
+
+# N5: prerequisite nesting depth
+df_depth = df_pl_course["depth"].value_counts().sort_index().reset_index()
+df_depth.columns = ["depth", "courses"]
+depth_names = {1: "1 — single course", 2: "2 — one AND/OR group",
+               3: "3 — nested", 4: "4 — deeply nested", 5: "5 — deeply nested"}
+df_depth["label"] = df_depth["depth"].map(lambda d: depth_names.get(d, str(d)))
+fig = px.bar(df_depth, x="label", y="courses", color="depth",
+             color_continuous_scale="Sunsetdark",
+             title="Prerequisite Logic Nesting Depth",
+             labels={"courses": "Unique Courses", "label": "Boolean Nesting Depth"})
+fig.update_layout(template=TEMPLATE, height=430)
+fig.update_coloraxes(showscale=False)
+charts["prereq_depth"] = chart_html(fig, "prereq_depth")
+
+# N6: toughest gateways — most mandatory (AND-ed) prerequisites
+df_gate = df_pl_course.nlargest(18, "mandatory").sort_values("mandatory")
+fig = go.Figure(go.Bar(
+    y=[f"{r.course} — {str(r.title)[:30]}" for r in df_gate.itertuples()],
+    x=df_gate["mandatory"], orientation="h", marker_color="#c0392b",
+    hovertemplate="%{y}<br>%{x} mandatory prerequisites<extra></extra>"))
+fig.update_layout(template=TEMPLATE,
+                  title="Toughest Gateways: Most Mandatory Prerequisites",
+                  height=560, xaxis_title="Courses That Must All Be Passed First",
+                  margin=dict(l=320), yaxis=dict(autorange="reversed"))
+charts["prereq_gateways"] = chart_html(fig, "prereq_gateways")
+toughest = df_gate.iloc[-1]
+
+# N7: curriculum flexibility — share of gated courses offering alternatives
+df_flex = df_pl_course.groupby("subject").agg(
+    courses=("course", "count"), with_or=("has_or", "sum")).reset_index()
+df_flex = df_flex[df_flex["courses"] >= 8]
+df_flex["flex_pct"] = (df_flex["with_or"] / df_flex["courses"] * 100).round(1)
+df_flex = df_flex.sort_values("flex_pct", ascending=False).head(18).sort_values("flex_pct")
+fig = px.bar(df_flex, x="flex_pct", y="subject", orientation="h",
+             color="flex_pct", color_continuous_scale="Greens",
+             hover_data=["with_or", "courses"],
+             title="Share of Gated Courses Offering Alternative Paths (by Dept)",
+             labels={"flex_pct": "% With OR-Alternatives", "subject": ""})
+fig.update_layout(template=TEMPLATE, height=520)
+fig.update_coloraxes(showscale=False)
+charts["prereq_flex"] = chart_html(fig, "prereq_flex")
+
+# N8: concurrent ("may be taken together") prerequisites over time
+df_conc = df_pl.groupby("year").agg(
+    trees=("course", "count"), conc=("concurrent", "sum")).reset_index()
+df_conc["conc_pct"] = (df_conc["conc"] / df_conc["trees"] * 100).round(1)
+fig = px.line(df_conc, x="year", y="conc_pct", markers=True,
+              title="Prerequisites Allowing Concurrent Enrollment Over Time",
+              labels={"conc_pct": "% of Prereq'd Sections", "year": "Year"},
+              color_discrete_sequence=["#16a085"])
+fig.update_traces(line=dict(width=2.5))
+fig.update_layout(template=TEMPLATE, height=400)
+charts["prereq_concurrent"] = chart_html(fig, "prereq_concurrent")
+concurrent_overall = round(df_pl["concurrent"].mean() * 100, 1)
+
+# ----- Degree-requirement mapping (catalog_detail.course_attributes) -------
+df_cd = pd.read_sql_query("""
+    SELECT subject, course_number, course_attributes
+    FROM catalog_detail WHERE course_attributes != ''
+""", conn)
+program_courses = {}          # program -> set of courses (elective options)
+course_programs = Counter()   # course -> number of distinct programs served
+for row in df_cd.itertuples():
+    code = f"{row.subject} {row.course_number}"
+    progs = set()
+    for tag in analysis.parse_attribute_tags(row.course_attributes):
+        prog = analysis.attribute_program(tag)
+        progs.add(prog)
+        if analysis.attribute_role(tag) == "Elective":
+            program_courses.setdefault(prog, set()).add(code)
+    course_programs[code] = len(progs)
+
+# N11: programs with the most elective course options
+df_prog = pd.DataFrame(
+    [(p, len(cs)) for p, cs in program_courses.items()],
+    columns=["program", "options"]).nlargest(20, "options").sort_values("options")
+fig = px.bar(df_prog, x="options", y="program", orientation="h",
+             color="options", color_continuous_scale="Tealgrn",
+             title="Programs With the Most Elective Course Options",
+             labels={"options": "Distinct Elective Courses", "program": ""})
+fig.update_layout(template=TEMPLATE, height=560, margin=dict(l=240))
+fig.update_coloraxes(showscale=False)
+charts["program_electives"] = chart_html(fig, "program_electives")
+
+# N12: most reusable courses — serve the most degree programs
+df_reuse = pd.DataFrame(course_programs.most_common(20), columns=["course", "programs"])
+df_reuse_titles = pd.read_sql_query("""
+    SELECT DISTINCT subject || ' ' || course_number AS course, title FROM courses
+""", conn)
+title_map = dict(zip(df_reuse_titles["course"], df_reuse_titles["title"]))
+df_reuse["label"] = df_reuse["course"].apply(lambda c: f"{c} — {str(title_map.get(c, ''))[:30]}")
+df_reuse = df_reuse.sort_values("programs")
+fig = go.Figure(go.Bar(y=df_reuse["label"], x=df_reuse["programs"], orientation="h",
+    marker_color="#16a085",
+    hovertemplate="%{y}<br>serves %{x} programs<extra></extra>"))
+fig.update_layout(template=TEMPLATE,
+                  title="Most Reusable Courses Across Degree Programs",
+                  height=560, xaxis_title="Distinct Degree Programs Served",
+                  margin=dict(l=320), yaxis=dict(autorange="reversed"))
+charts["reusable_courses"] = chart_html(fig, "reusable_courses")
 
 conn.close()
 
@@ -2097,6 +2369,7 @@ footer p {{ margin-top: 0.3rem; }}
     <a href="#subjects">Subjects</a>
     <a href="#levels">Levels</a>
     <a href="#instructors">Instructors</a>
+    <a href="#team-teaching">Team Teaching</a>
     <a href="#modality">Modality</a>
     <a href="#covid">COVID</a>
     <a href="#schedule">Schedule</a>
@@ -2215,6 +2488,20 @@ footer p {{ margin-top: 0.3rem; }}
   <div class="chart-container">{charts['course_ownership_top']}</div>
   <div class="explanation">
     The longest instructor-course pairings in AUS history. <strong>{most_owned_instructor}</strong> has taught <strong>{most_owned_course}</strong> for {most_owned_terms} semesters &mdash; an extraordinary run of continuity. These are the courses where one person has become synonymous with the class.
+  </div>
+
+  <h3 class="chains-title" id="team-teaching">Team Teaching</h3>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The charts above credit each section to its instructor of record. But AUSCrawl now captures <strong>every</strong> instructor on a section &mdash; so we can finally see co-teaching. <strong>{co_overall_pct}% of all sections are taught by two or more instructors.</strong></p>
+  <div class="chart-row">
+    <div class="chart-container">{charts['co_time']}</div>
+    <div class="chart-container">{charts['co_dept']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> The share of co-taught sections each semester. <strong>Right:</strong> Co-teaching is overwhelmingly an <strong>engineering and lab-science</strong> phenomenon &mdash; Biomedical (BME), Materials (MSE), and Mechatronics (MTR) lead, where capstones, design studios, and supervised labs routinely pair instructors. Lecture-heavy subjects rarely co-teach.
+  </div>
+  {'<div class="chart-container">' + charts.get("co_pairs", "") + '</div>' if "co_pairs" in charts else ""}
+  <div class="explanation">
+    The instructor pairs who have shared the most sections &mdash; long-running teaching partnerships, typically co-supervising the same lab or capstone sequence year after year.
   </div>
 </section>
 
@@ -2343,6 +2630,27 @@ footer p {{ margin-top: 0.3rem; }}
     <strong>Left:</strong> Departments ranked by average prerequisites per course. Engineering and science departments have the most complex prerequisite structures. <strong>Right:</strong> A matrix showing which departments depend on which others for prerequisites. Many engineering departments depend heavily on MTH and PHY courses.
   </div>
 
+  <h3 class="chains-title" id="prereq-logic">Prerequisite Logic &amp; Complexity</h3>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The graph above counts prerequisite <em>links</em>. But AUSCrawl also parses each requirement into its full <strong>boolean logic tree</strong> &mdash; the AND/OR structure students actually navigate. <strong>{or_share}% of courses with prerequisites offer at least one "or" alternative path.</strong></p>
+  <div class="chart-row">
+    <div class="chart-container">{charts['prereq_shape']}</div>
+    <div class="chart-container">{charts['prereq_depth']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> Most prerequisites are not a simple checklist. Beyond single-course and pure "all of these" (AND) requirements, a large share offer <strong>alternative paths</strong> (OR) or genuinely <strong>nested</strong> logic like "MTH 103 AND (PHY 101 OR PHY 102)". <strong>Right:</strong> How deeply nested that logic gets &mdash; depth 1 is a lone course, depth 2 is a single AND/OR group, and depth 3+ mixes them.
+  </div>
+  <div class="chart-row">
+    <div class="chart-container">{charts['prereq_gateways']}</div>
+    <div class="chart-container">{charts['prereq_flex']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> The toughest gateways &mdash; courses with the most <strong>mandatory</strong> prerequisites (courses that must <em>all</em> be passed, ignoring optional OR branches). <strong>{toughest.course}</strong> tops the list with {int(toughest.mandatory)}. <strong>Right:</strong> Which departments build flexibility into their curriculum &mdash; the share of their gated courses that offer at least one alternative path rather than a rigid chain.
+  </div>
+  <div class="chart-container">{charts['prereq_concurrent']}</div>
+  <div class="explanation">
+    Some prerequisites may be taken <strong>concurrently</strong> ("may be taken together") rather than strictly beforehand &mdash; common for lecture/lab or theory/practice pairs. Overall, <strong>{concurrent_overall}% of prerequisite requirements</strong> allow a concurrent course, and the practice has shifted over time.
+  </div>
+
   <h3 class="chains-title">Corequisite Analysis</h3>
   <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">Corequisites are courses that must be taken simultaneously. AUS has <strong>{total_coreq_links:,}</strong> corequisite links across the curriculum.</p>
   {'<div class="chart-container">' + charts.get("coreq_top", "") + '</div>' if "coreq_top" in charts else ""}
@@ -2387,6 +2695,16 @@ footer p {{ margin-top: 0.3rem; }}
   <div class="explanation">
     This stacked area chart shows how different categories of course attributes have evolved over time. Growth in "Communication/English" and "Natural Sciences" tags reflects expanding gen-ed requirements. The overall increase in tagged sections mirrors the university's growth in total offerings.
   </div>
+
+  <h3 class="chains-title" id="degree-requirements">Degree Requirement Mapping</h3>
+  <p style="color: var(--text-secondary); margin-bottom: 1rem; font-size: 0.92rem;">The catalog tags each course with the degree programs it counts toward &mdash; an elective for this major, a requirement for that minor. Mapping those tags reveals how courses are shared across the university's degree programs.</p>
+  <div class="chart-row">
+    <div class="chart-container">{charts['program_electives']}</div>
+    <div class="chart-container">{charts['reusable_courses']}</div>
+  </div>
+  <div class="explanation">
+    <strong>Left:</strong> Which degree programs offer students the widest menu of elective courses. <strong>Right:</strong> The most <strong>reusable</strong> courses &mdash; single courses that count toward the largest number of distinct degree programs. These are the curriculum's connective tissue: foundational and business courses that satisfy electives across many majors and minors at once.
+  </div>
 </section>
 
 <!-- 12. Catalog -->
@@ -2412,23 +2730,30 @@ footer p {{ margin-top: 0.3rem; }}
 <!-- 13. Enrollment -->
 <section id="enrollment">
   <div class="section-header">
-    <div class="section-num">13 &mdash; Enrollment</div>
-    <h2>How Full Are Classes?</h2>
-    <p>Tracking seat availability and enrollment restrictions across 20 years.</p>
+    <div class="section-num">13 &mdash; Enrollment &amp; Access</div>
+    <h2>Section Closure &amp; Enrollment Rules</h2>
+    <p>What Banner reveals about demand and who is allowed to register.</p>
+  </div>
+  <div class="insight">
+    <strong>A note on the data:</strong> AUS Banner never publishes seat counts or enrollment totals &mdash; only a binary <em>"open seats: yes/no"</em> flag captured at crawl time. For a <strong>completed</strong> term that flag effectively records whether a section <em>closed</em> (filled up); it is not a true fill rate (enrolled ÷ capacity), which the source data cannot support. The term currently in open registration is excluded from these charts, since its seats are still changing.
   </div>
   <div class="chart-container">{charts['enrollment']}</div>
   <div class="explanation">
-    Each bar represents a semester, split into sections with <strong>available seats (green)</strong> and sections <strong>completely full (red)</strong>. Note that this reflects a snapshot when scraped, not the full registration period.
+    Each bar is a completed semester, split into sections that still <strong>had open seats (green)</strong> and those that <strong>closed with none remaining (red)</strong>; the line tracks the closure percentage. Closures have climbed steadily &mdash; from about <strong>{closure_early:.0f}%</strong> of sections in the late 2000s to <strong>{closure_recent:.0f}%</strong> in recent years &mdash; consistent with a growing student body filling sections more tightly.
   </div>
   <div class="chart-container">{charts['fill_rate']}</div>
   <div class="explanation">
-    Subjects ranked by what percentage of their sections were full. <strong>Higher bars mean more sections at capacity</strong> and potentially high demand.
+    Subjects ranked by the share of their sections that closed (no open seats remaining). <strong>Higher bars suggest tighter capacity and stronger demand</strong> &mdash; though remember this is a binary snapshot, not a measured fill rate.
   </div>
   {'<div class="chart-container">' + charts.get("fees", "") + '</div><div class="explanation">Course fees vary by college and type. The boxes show the spread of fee amounts. Different colleges charge different technology fee tiers.</div>' if "fees" in charts else ""}
   {'<div class="chart-container">' + charts.get("fee_trend", "") + '</div><div class="explanation">Fee trends over time reflect general cost inflation and evolving technology requirements across different colleges.</div>' if "fee_trend" in charts else ""}
-  <div class="chart-container">{charts['restriction_types']}</div>
+  <div class="chart-container">{charts['restrictions_typed']}</div>
   <div class="explanation">
-    <strong>{restricted_pct}% of sections have enrollment restrictions.</strong> The vast majority are level-based restrictions (e.g., "Undergraduate Only" or "Graduate Only"), ensuring students are in appropriate courses for their academic level. A smaller portion restrict by major, college, or class standing.
+    Each restriction is parsed into a typed <strong>include</strong> ("must be") or <strong>exclude</strong> ("must not be") rule. <strong>{restricted_pct}% of sections carry at least one restriction</strong>, but the chart sets aside the near-universal academic-level gates (every undergraduate course is "undergraduate-only") to surface the rules that genuinely narrow who can register. Rules tied to a specific college, major, program, or field of study apply to <strong>{selective_section_pct}% of all sections</strong>.
+  </div>
+  <div class="chart-container">{charts['restricted_courses']}</div>
+  <div class="explanation">
+    {selective_restricted} courses carry a college-, major-, or program-specific rule at some point; the most frequently restricted are shown here &mdash; typically senior capstones, clinical courses, and cohort-based graduate seminars reserved for students already in the program.
   </div>
 </section>
 
