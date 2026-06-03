@@ -2103,6 +2103,25 @@ jsonld = json.dumps({
     "isBasedOn": "https://github.com/DeadPackets/AUSCrawl",
 }, separators=(",", ":")).replace("</", "<\\/")
 
+# All heavy data lives in an external file so index.html stays small enough for
+# social crawlers to scrape (LinkedIn caps ingestion at 3 MB; the inline version
+# was ~7 MB). data.js loads as a classic <script> before the inline app script,
+# and its top-level consts share the global lexical scope, so the app code below
+# references courseData/__CHART_SPECS__/etc. unchanged. Keeping it external also
+# lets the tiny HTML paint before the multi-megabyte payload finishes loading.
+data_js = f"""// VisualizeAUS data payload — loaded by index.html before the app script.
+const __CHART_SPECS__ = {chart_specs_json};
+const courseData = {browse_json};
+const catalogData = {catalog_json};
+const depData = {dep_explorer_json};
+const instData = {inst_explorer_json};
+const courseTitles = {course_titles_json};
+const courseProfiles = {course_profiles_json};
+const prereqTrees = {prereq_trees_json};
+const programMap = {program_map_json};
+const courseToPrograms = {course_to_programs_json};
+"""
+
 html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -3563,18 +3582,8 @@ footer p {{ margin-top: 0.3rem; }}
   </p>
 </footer>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
-<script type="application/json" id="chart-data">{chart_specs_json}</script>
+<script src="data.js"></script>
 <script>
-// ---- Data ----
-const courseData = {browse_json};
-const catalogData = {catalog_json};
-const depData = {dep_explorer_json};
-const instData = {inst_explorer_json};
-const courseTitles = {course_titles_json};
-const courseProfiles = {course_profiles_json};
-const prereqTrees = {prereq_trees_json};
-const programMap = {program_map_json};
-const courseToPrograms = {course_to_programs_json};
 function courseName(code) {{ return courseTitles[code] || ''; }}
 function codeWithName(code) {{
   const t = courseName(code);
@@ -4162,7 +4171,7 @@ syncActiveNav();
 // ready. Each chart re-themes itself for dark mode at render time.
 function setupLazyCharts() {{
   let specs;
-  try {{ specs = JSON.parse(document.getElementById('chart-data').textContent); }}
+  try {{ specs = __CHART_SPECS__; }}
   catch (e) {{ return; }}
   const draw = (el) => {{
     if (el.dataset.rendered) return;
@@ -4202,6 +4211,7 @@ else setupLazyCharts();
 # ---------------------------------------------------------------------------
 OUT_DIR.mkdir(exist_ok=True)
 (OUT_DIR / "index.html").write_text(html)
+(OUT_DIR / "data.js").write_text(data_js)
 
 # Social / share assets (OG card, favicon, per-chart share pages)
 og_stats = [
@@ -4220,6 +4230,7 @@ write_share_pages(OUT_DIR)
 
 print(f"Built site: {OUT_DIR / 'index.html'}")
 print(f"  Charts: {len(charts)}")
-print(f"  File size: {len(html) / 1024 / 1024:.1f} MB")
+print(f"  index.html: {len(html) / 1024 / 1024:.2f} MB  (must stay < 3 MB for social crawlers)")
+print(f"  data.js:    {len(data_js) / 1024 / 1024:.2f} MB")
 print(f"  Course table: {len(df_browse_recent)} rows")
 print(f"  Catalog table: {len(df_cat_browse)} rows")
