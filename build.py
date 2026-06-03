@@ -2942,9 +2942,18 @@ footer p {{ margin-top: 0.3rem; }}
   -webkit-overflow-scrolling: touch;
 }}
 
+/* Tablet & landscape phone: stack the two-up chart rows and trim the page and
+   card padding so graphs use the available width instead of sitting in wide
+   side margins. Charts go side-by-side only on true desktop widths (>1024). */
+@media (max-width: 1024px) {{
+  .container {{ padding: 0 1rem; }}
+  .chart-row {{ grid-template-columns: 1fr; gap: 1rem; }}
+  .chart-container {{ padding: 1rem; }}
+}}
+
 @media (max-width: 768px) {{
   /* Layout */
-  .container {{ padding: 0 0.75rem; }}
+  .container {{ padding: 0 0.5rem; }}
   section {{ padding: 2.5rem 0; }}
 
   /* Hero */
