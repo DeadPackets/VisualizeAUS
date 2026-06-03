@@ -19,7 +19,7 @@
 
 ---
 
-An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, a cross-linked **Course Explorer** (full profiles + visual prerequisite roadmaps), instructor lookup, a **Degree Explorer**, searchable data tables, and a prerequisite network of 156,512 links — all in a single self-contained HTML page.
+An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, a cross-linked **Course Explorer** (full profiles + visual prerequisite roadmaps), instructor lookup, a **Degree Explorer**, searchable data tables, and a prerequisite network of 156,512 links — a single static page that runs entirely in your browser, no backend.
 
 **Data source:** [AUSCrawl](https://github.com/DeadPackets/AUSCrawl)
 
@@ -85,7 +85,8 @@ VisualizeAUS/
     test_analysis.py   # Unit tests for analysis.py (run with pytest)
   aus_courses.db       # Downloaded at build time (not in repo)
   _site/
-    index.html         # Generated site (~4.8 MB, self-contained)
+    index.html         # Generated page shell (~0.15 MB — small enough for social crawlers)
+    data.js            # Chart + explorer data payload (~7 MB, loaded by index.html)
   .github/
     workflows/
       deploy.yml       # GitHub Pages auto-deployment
