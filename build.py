@@ -72,10 +72,18 @@ def chart_html(fig, chart_id):
     chart's share URL (``/share/<id>/``), a stub page that carries chart-
     specific OpenGraph tags and redirects humans to ``#chart-<id>``.
     """
-    chart_specs[chart_id] = json.loads(pio.to_json(fig))
+    import html as _html
     title = fig.layout.title.text if fig.layout.title else None
     chart_meta[chart_id] = _clean_title(title, chart_id)
     height = fig.layout.height or 450
+    # Also expose the title as an HTML heading above the chart, hidden on
+    # desktop (which keeps Plotly's in-canvas title) and shown only on phones,
+    # where it wraps to the card width. On phones mobileLayout() drops the
+    # in-canvas Plotly title — which doesn't wrap and clips — so only the HTML
+    # heading shows and the plot's top edge is free for the legend.
+    chart_specs[chart_id] = json.loads(pio.to_json(fig))
+    title_html = (f'<h3 class="chart-title">{_html.escape(chart_meta[chart_id])}</h3>'
+                  if chart_meta[chart_id] else "")
     return (
         f'<button class="chart-share" type="button" title="Copy link to this chart" '
         f'aria-label="Copy a shareable link to this chart" onclick="copyShare(\'{chart_id}\')">'
@@ -83,6 +91,7 @@ def chart_html(fig, chart_id):
         f'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
         f'<path d="M10 13a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1"></path>'
         f'<path d="M14 11a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"></path></svg></button>'
+        f'{title_html}'
         f'<div id="chart-{chart_id}" class="lazy-chart" data-cid="{chart_id}" '
         f'style="min-height:{height}px;"></div>'
     )
@@ -2547,6 +2556,38 @@ section + section {{
   transition: box-shadow 0.3s ease, border-color 0.3s ease;
 }}
 
+/* Chart title rendered as HTML above the plot (see chart_html). Hidden on
+   desktop, which keeps Plotly's in-canvas title; shown only on phones, where it
+   wraps to the card width instead of clipping inside the Plotly canvas. */
+.chart-title {{
+  display: none;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+  margin: 0.1rem 0 0.9rem;
+  padding-right: 2.4rem;
+  text-wrap: balance;
+}}
+
+/* Skeleton shown inside a card until its lazy Plotly chart is drawn, so an
+   un-rendered card reads as "loading" rather than a broken / empty box.
+   `:empty` stops matching the moment Plotly populates the div. */
+.lazy-chart:empty {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+}}
+.lazy-chart:empty::after {{
+  content: "Loading chart…";
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  letter-spacing: 0.03em;
+  animation: chartpulse 1.4s ease-in-out infinite;
+}}
+@keyframes chartpulse {{ 0%, 100% {{ opacity: 0.35; }} 50% {{ opacity: 0.8; }} }}
+
 /* per-chart "copy share link" button */
 .chart-share {{
   position: absolute;
@@ -2986,6 +3027,7 @@ footer p {{ margin-top: 0.3rem; }}
   .chart-row {{ grid-template-columns: 1fr; gap: 1rem; }}
   .chart-container {{ padding: 0.5rem; margin-bottom: 1rem; }}
   .chart-container .plotly-graph-div {{ min-width: 0 !important; }}
+  .chart-title {{ display: block; font-size: 0.95rem; margin: 0.1rem 0 0.6rem; padding-right: 2rem; }}
 
   /* Explanations */
   .explanation {{ padding: 0.75rem 1rem; font-size: 0.85rem; margin: -0.25rem 0 1.5rem; }}
@@ -4182,21 +4224,40 @@ function setupLazyCharts() {{
   let specs;
   try {{ specs = __CHART_SPECS__; }}
   catch (e) {{ return; }}
+  // On phones Plotly's desktop margins, fonts, and right-side legends swallow
+  // the narrow width, leaving a tiny plot area and clipped titles. Re-fit the
+  // layout for small screens before drawing: tighter auto-margins, smaller
+  // fonts, a left-aligned title, and any vertical legend moved below the plot.
+  const mobileLayout = (layout) => {{
+    if (window.innerWidth > 768) return layout;
+    const L = JSON.parse(JSON.stringify(layout || {{}}));
+    delete L.title;  // shown as a wrapping HTML heading above the chart instead
+    L.font = Object.assign({{}}, L.font, {{size: 10}});
+    L.margin = {{l: 48, r: 14, t: 14, b: 40}};
+    ['xaxis', 'yaxis', 'xaxis2', 'yaxis2'].forEach(ax => {{ if (L[ax]) L[ax].automargin = true; }});
+    // The title is an HTML heading above the chart, so the plot's top edge is
+    // free for a compact horizontal legend instead of one eating the width.
+    if (L.showlegend !== false) {{
+      L.legend = {{orientation: 'h', x: 0, xanchor: 'left', y: 1, yanchor: 'bottom', font: {{size: 9}}}};
+      L.margin.t = 46;
+    }}
+    return L;
+  }};
   const draw = (el) => {{
     if (el.dataset.rendered) return;
     const spec = specs[el.getAttribute('data-cid')];
     if (!spec || typeof Plotly === 'undefined') return;
     el.dataset.rendered = '1';
-    Plotly.newPlot(el, spec.data, spec.layout, {{responsive: true}}).then(() => {{
+    Plotly.newPlot(el, spec.data, mobileLayout(spec.layout), {{responsive: true}}).then(() => {{
       el.style.minHeight = '';
       if (isDark()) themeChart(el, true);
     }});
   }};
-  // Generous lead margin: render charts ~600px before they enter view so the
-  // (one-time) Plotly init cost is paid off-screen and no empty box flashes.
+  // Render charts ~900px before they enter view so the (one-time) Plotly init
+  // cost is paid off-screen; the CSS "Loading chart" skeleton covers any gap.
   const io = new IntersectionObserver((entries, obs) => {{
     entries.forEach(e => {{ if (e.isIntersecting) {{ obs.unobserve(e.target); draw(e.target); }} }});
-  }}, {{ rootMargin: '600px 0px' }});
+  }}, {{ rootMargin: '900px 0px' }});
   document.querySelectorAll('.lazy-chart').forEach(el => io.observe(el));
   // Deep link: if opened at #chart-x (e.g. via a /share/ redirect), render that
   // chart immediately and scroll to it instead of waiting for it to intersect.
