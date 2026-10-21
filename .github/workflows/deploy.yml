@@ -25,7 +25,8 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install pandas numpy plotly networkx pytest "kaleido==0.2.1" pillow
+        # plotly 7 needs kaleido>=1 for the share-card images; keep the pair that works.
+        run: pip install pandas numpy "plotly<7" networkx pytest "kaleido==0.2.1" pillow
 
       # Pinned: db-2026-08-15 renamed s.term_id, which build.py does not support yet.
       - name: Download database from AUSCrawl (pinned release)
