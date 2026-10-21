@@ -27,10 +27,11 @@ jobs:
       - name: Install dependencies
         run: pip install pandas numpy plotly networkx pytest "kaleido==0.2.1" pillow
 
-      - name: Download database from AUSCrawl (latest release asset)
+      # Pinned: db-2026-08-15 renamed s.term_id, which build.py does not support yet.
+      - name: Download database from AUSCrawl (pinned release)
         run: |
           curl -fL -o aus_courses.db.gz \
-            https://github.com/DeadPackets/AUSCrawl/releases/latest/download/aus_courses.db.gz
+            https://github.com/DeadPackets/AUSCrawl/releases/download/db-2026-06-02/aus_courses.db.gz
           gunzip aus_courses.db.gz
 
       - name: Run tests

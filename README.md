@@ -19,7 +19,7 @@
 
 ---
 
-An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, a cross-linked **Course Explorer** (full profiles + visual prerequisite roadmaps), instructor lookup, a **Degree Explorer**, searchable data tables, and a prerequisite network of 156,512 links — a single static page that runs entirely in your browser, no backend.
+An interactive data visualization dashboard exploring every course offered at the **American University of Sharjah** from 2005 to 2026. 62 fully interactive Plotly charts across 14 analytical sections, a cross-linked **Course Explorer** (full profiles + visual prerequisite roadmaps), instructor lookup, a **Degree Explorer**, searchable data tables, and a prerequisite network of 156,512 links. Two static pages run entirely in your browser, no backend: an 8-chapter scrollytelling **story** at `/` and an **Explore** tool at `/explore/` with every chart, explorer, and table.
 
 **Data source:** [AUSCrawl](https://github.com/DeadPackets/AUSCrawl)
 
@@ -62,7 +62,7 @@ cd VisualizeAUS
 
 # Download the database from the AUSCrawl GitHub Release (gzipped, ~16 MB)
 curl -fL -o aus_courses.db.gz \
-  https://github.com/DeadPackets/AUSCrawl/releases/latest/download/aus_courses.db.gz
+  https://github.com/DeadPackets/AUSCrawl/releases/download/db-2026-06-02/aus_courses.db.gz
 gunzip aus_courses.db.gz
 
 # Install dependencies, run the tests, and build
@@ -70,7 +70,8 @@ pip install pandas numpy plotly networkx pytest
 pytest -q
 python build.py
 
-# Open _site/index.html in your browser
+# Serve it (the pages load charts.js, so open them over HTTP)
+python3 -m http.server 8765 -d _site   # then visit http://localhost:8765/
 ```
 
 ---
@@ -83,10 +84,14 @@ VisualizeAUS/
   analysis.py          # Pure helpers for the prerequisite/restriction/attribute JSON
   tests/
     test_analysis.py   # Unit tests for analysis.py (run with pytest)
+    e2e_check.js       # Browser E2E check for the built site (paste into DevTools)
   aus_courses.db       # Downloaded at build time (not in repo)
   _site/
-    index.html         # Generated page shell (~0.15 MB — small enough for social crawlers)
-    data.js            # Chart + explorer data payload (~7 MB, loaded by index.html)
+    index.html         # Story page: 8 chapters, scrollytelling lead charts (~0.1 MB)
+    charts.js          # Chart specs shared by both pages (~0.7 MB)
+    explore/
+      index.html       # Explore page: explorers, tables, all charts (~0.15 MB)
+      explore-data.js  # Explorer and table data (~5.8 MB, loaded only here)
   .github/
     workflows/
       deploy.yml       # GitHub Pages auto-deployment
